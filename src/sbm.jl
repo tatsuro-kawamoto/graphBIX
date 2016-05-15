@@ -1,4 +1,6 @@
-function EM(degrees,Ntot,B,links,maxCrs,initial)
+# version 1.0.2
+
+function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
 
     function logsumexp(array)
         array = vec(sortcols(array))
@@ -6,7 +8,7 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
             array[end] - array[1] > log(10^(16.0)) ? shift!(array) : break # this cutoff must be smaller than cutoff in normalize_logprob: e.g. all elements are below cutoff.
         end
         if maximum(array) - minimum(array) > 700
-            println("overflow or underflow are UNAVOIDABLE: restrict Crs to smaller values.")
+            println("overflow or underflow is UNAVOIDABLE: restrict Crs to smaller values.")
         end
         array[1] + log(sum(exp(array - vec(ones(1,length(array)))*array[1])))
     end
@@ -48,14 +50,19 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
 
     function updatePSI(theta,Crs,h,gr,PSIcav,nb,PSI)
         for i = 1:Ntot
-            logPSIi = logunnormalizedMessage(i,theta,Crs,h,gr,PSIcav,nb)
+            logPSIi = logunnormalizedMessage(i)
             PSI[i,:] = normalize_logprob(logPSIi)
         end
         return PSI
     end
         
-    function logunnormalizedMessage(i,theta,Crs,h,gr,PSIcav,nb)
-        logmessages = sum([log(theta[i]*theta[s]*PSIcav[(s,i)]*Crs) for s in nb[i]],1)[1]
+    function logunnormalizedMessage(i)
+        logmessages = 0
+        for s in nb[i]
+            indsi = sub2ind((Ntot,Ntot),s,i)
+            logmessages += log(theta[i]*theta[s]*PSIcav[indsi]*Crs)
+        end
+        # logmessages = sum([log(theta[i]*theta[s]*PSIcav[(s,i)]*Crs) for s in nb[i]],1)[1]
         for r = 1:B
             if isnan(gr[r]) == true || gr[r] < 10^(-9.0)
                 gr[r] = 1/Ntot
@@ -70,20 +77,23 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
     function BP()
         conv = 0
         h = update_h()
-        for k in randperm(size(links,1))
-            (i,j) = tuple(links[k,:]...)
-            logPSIi = logunnormalizedMessage(i,theta,Crs,h,gr,PSIcav,nb)
-            PSIcav[(i,j)] = logPSIi - log(theta[j]*theta[i]*PSIcav[(j,i)]*Crs) # this is actually log(PSIcav[(i,j)])
-            PSIcav[(i,j)] = normalize_logprob(PSIcav[(i,j)])
-
-            hprev = theta[j]*PSI[j,:]*Crs/Ntot
-            grprev = PSI[j,:]/Ntot
-            prev = PSI[j,:]/Ntot
-            logPSIj = logunnormalizedMessage(j,theta,Crs,h,gr,PSIcav,nb) # new PSI with new PSIcav
-            PSI[j,:] = normalize_logprob(logPSIj)
-            h += theta[j]*PSI[j,:]*Crs/Ntot - hprev
-            gr += PSI[j,:]/Ntot - grprev
-            conv += sum(abs(PSI[j,:]/Ntot - prev))
+        for i = 1:Ntot # i in randperm(Ntot)
+            logPSIi = logunnormalizedMessage(i)
+            for j in nb[i]
+                indij = sub2ind((Ntot,Ntot),i,j)
+                indji = sub2ind((Ntot,Ntot),j,i)
+                PSIcav[indij] = logPSIi - log(theta[j]*theta[i]*PSIcav[indji]*Crs) # this is actually log(PSIcav[indij]) 
+                PSIcav[indij] = normalize_logprob(PSIcav[indij])
+            end
+            
+            hprev = theta[i]*PSI[i,:]*Crs/Ntot
+            grprev = PSI[i,:]/Ntot
+            prev = PSI[i,:]/Ntot
+            logPSIi = logunnormalizedMessage(i) # new PSI with new PSIcav
+            PSI[i,:] = normalize_logprob(logPSIi)
+            h += theta[i]*PSI[i,:]*Crs/Ntot - hprev
+            gr += PSI[i,:]/Ntot - grprev
+            conv += sum(abs(PSI[i,:]/Ntot - prev))
         end
         return (conv, PSI)
     end
@@ -92,7 +102,9 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
         Crsnew = zeros(B,B)
         for ij = 1:Ktot
             (i,j) = (links[ij,1],links[ij,2])
-            ccrs = theta[i]*theta[j]*PSIcav[(i,j)]'*PSIcav[(j,i)].*Crs
+            indij = sub2ind((Ntot,Ntot),i,j)
+            indji = sub2ind((Ntot,Ntot),j,i)
+            ccrs = theta[i]*theta[j]*PSIcav[indij]'*PSIcav[indji].*Crs
             Crsnew += ccrs/sum(ccrs)
         end
         Crs = Crsnew ./ (Ntot*gr'*gr)
@@ -110,7 +122,7 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
     function freeenergy()
         sumlogZi = 0
         for i = 1:Ntot
-            sumlogZi += logsumexp(logunnormalizedMessage(i,theta,Crs,h,gr,PSIcav,nb))
+            sumlogZi += logsumexp(logunnormalizedMessage(i))
         end
         
         Ltot = Int64(0.5*size(links,1))
@@ -121,6 +133,8 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
         cnt = 0
         for ij = 1:Ktot
             (i,j) = (links[ij,1],links[ij,2])
+            indij = sub2ind((Ntot,Ntot),i,j)
+            indji = sub2ind((Ntot,Ntot),j,i)
             if i < j
                 continue
             end
@@ -128,7 +142,7 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
             logbiprob = Float32[]
             for s = 1:B
                 for t=1:B
-                    push!(logbiprob, log(PSIcav[(i,j)][s])+log(theta[i])+log(Crs[s,t])+log(theta[j])+log(PSIcav[(j,i)][t]))
+                    push!(logbiprob, log(PSIcav[indij][s])+log(theta[i])+log(Crs[s,t])+log(theta[j])+log(PSIcav[indji][t]))
                 end
             end
             logZijs[cnt] = logsumexp(logbiprob') - log(Ntot)
@@ -136,7 +150,7 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
             CVGPij = 0
             for s = 1:B
                 for t=1:B
-                    CVGPij += PSIcav[(i,j)][s]*(log(theta[i])+log(Crs[s,t])+log(theta[j])-log(Ntot))*PSIcav[(j,i)][t]
+                    CVGPij += PSIcav[indij][s]*(log(theta[i])+log(Crs[s,t])+log(theta[j])-log(Ntot))*PSIcav[indji][t]
                 end
             end
             CVGPs[cnt] = CVGPij
@@ -144,13 +158,13 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
             CVGTij = 0
             for s = 1:B
                 for t=1:B
-                    CVGTij += PSIcav[(i,j)][s]*theta[i]*Crs[s,t]*theta[j]*(log(theta[i])+log(Crs[s,t])+log(theta[j])-log(Ntot))*PSIcav[(j,i)][t]/(Ntot*exp(logZijs[cnt])) # factor N cancels at Crs and Zij
+                    CVGTij += PSIcav[indij][s]*theta[i]*Crs[s,t]*theta[j]*(log(theta[i])+log(Crs[s,t])+log(theta[j])-log(Ntot))*PSIcav[indji][t]/(Ntot*exp(logZijs[cnt])) # factor N cancels at Crs and Zij
                 end
             end
             CVGTs[cnt] = CVGTij
             # MAP estimate
-            (MAPij, s) = findmax(PSIcav[(i,j)])
-            (MAPji, t) = findmax(PSIcav[(j,i)])
+            (MAPij, s) = findmax(PSIcav[indij])
+            (MAPji, t) = findmax(PSIcav[indji])
             CVMAPs[cnt] = log(theta[i])+log(Crs[s,t])+log(theta[j]) - log(Ntot)
             #################
         end
@@ -219,7 +233,17 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
     Crsfail = false
     itrnum = 0
     Ktot = size(links,1)
-    nb = [links[links[:,1].==lnode,2] for lnode = 1:Ntot]
+    inds = sub2ind((Ntot,Ntot),links[:,1],links[:,2])
+    A = sparse(links[:,1],links[:,2],ones(Ktot),Ntot,Ntot)
+    # neighboring vertices --------
+    nb = Array[]
+    row = rowvals(A)
+    for j = 1:Ntot
+        push!(nb,Int64[row[i] for i in nzrange(A,j)])
+    end
+    #nb = [links[links[:,1].==lnode,2] for lnode = 1:Ntot]
+    # ----------------------------------
+    degrees = sum(A,2)
 
     theta = ones(Ntot,1)
     #------initial Crs & gr
@@ -252,11 +276,11 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
         end
     end
     end
-    
+
     PSIcav = Dict()
-    for ij = 1:size(links,1)
-        PSIcav[tuple(links[ij,1],links[ij,2])] = rand(1,B) + 0.0001 # = 0.0001 to avoid too small values
-        PSIcav[tuple(links[ij,1],links[ij,2])] = PSIcav[tuple(links[ij,1],links[ij,2])] / sum(PSIcav[tuple(links[ij,1],links[ij,2])])
+    for ind in inds
+        PSIcav[ind] = rand(1,B)
+        PSIcav[ind] = PSIcav[ind]/sum(PSIcav[ind])
     end
     h = zeros(1,B)
     PSI = zeros(Ntot,B)
@@ -273,21 +297,25 @@ function EM(degrees,Ntot,B,links,maxCrs,initial)
     
     if fail == false        
         itrmax = 128
-        BPconvthreshold = 0.0001#0.00000001
+        BPconvthreshold = 0.000001*Ntot
         PSI = updatePSI(theta,Crs,h,gr,PSIcav,nb,PSI)
         gr = update_gr(PSI)
         for itr = 1:itrmax
             (BPconv, PSI) = BP()
             (Crs, Crsfail) = update_Crs()
-            theta = update_theta()
+			if degreecorrection == true
+            	theta = update_theta()
+			end
             if BPconv < BPconvthreshold
                 #println("converged! ^_^: itr = $(itr)")
+				println(".")
                 cnv = true
                 itrnum = itr
                 break
             elseif itr == itrmax
-                println("NOT converged... trying again...")
+                println("NOT converged... T_T")
             end
+			print(".")
         end
     
         h = update_h()
@@ -304,8 +332,8 @@ end
 
 ################################################
 function simplegraph(links)
-    links = unique(links,1)
     links = vcat(links,hcat(links[:,2],links[:,1]))
+    links = unique(links,1)
     # remove self-loops
     boolean = trues(size(links,1))
     for i = 1:size(links,1)
@@ -314,14 +342,6 @@ function simplegraph(links)
     links = links[boolean,:]
     
     return links
-end
-
-function degreesequence(nb,Ntot)
-    degrees = zeros(Int64,Ntot,1)
-    for i = 1:Ntot
-        degrees[i]=length(nb[i])
-    end
-    return degrees
 end
 
 function Laplacian(links,Ntot,B)
@@ -335,15 +355,6 @@ function Laplacian(links,Ntot,B)
     (eigenvalues,V) = eigs(L,nev=B,which=:LM)#,maxiter=1000,v0=rand(Ntot))
     eigenvalues = eigenvalues + shift
     return (eigenvalues,V)
-end
-
-function IPR(V)
-    IPRmax = 0
-    for r = 1:size(V,2)
-        IPR = sum(V[:,r].^4)/(sum(V[:,r].^2))^2
-        IPR > IPRmax ? IPRmax = IPR : continue
-    end
-    return IPRmax
 end
 
 function DFS(nb,root)
@@ -363,34 +374,27 @@ function DFS(nb,root)
 end
 
 function LinksConnected(links,Ntotinput,cc)
-    Nblock = [Ntotinput]
-    B = 1 # just 1 block: no blocks are given a priori for real data.
-    # Nblock of connected component -----
     cc = sort(cc)
-    ccNblock = zeros(Int64,B)
     t = 1
     defects = Int64[]
-    for k = 1:B
-        ndef = 0
-        offset = sum(Nblock[1:k-1])
-        for i = 1:Nblock[k]
-            if t <= length(cc)
-                if offset + i == cc[t]
-                    t += 1
-                    continue
-                end
+    ndef = 0
+    for i = 1:Ntotinput
+        if t <= length(cc)
+            if i == cc[t]
+                t += 1
+                continue
             end
-            ndef += 1
-            push!(defects,offset+i) # ndef = # of defect nodes in Nblock[k]
         end
-        ccNblock[k] = Nblock[k] - ndef
+        ndef += 1
+        push!(defects,i) # ndef = # of defect nodes
     end
+    Ntot = Ntotinput - ndef
     #---------------------------------------------------
     
     # links of connected component ------------
     boolean = trues(size(links,1))
     for u = 1:size(links,1)
-        links[u,1] in cc ? continue : boolean[u] = false
+        links[u,1] in cc || links[u,2] in cc ? continue : boolean[u] = false # For undirected(bidirected) case, links[u,1] in cc is enough.
     end
     links = links[boolean,:]
     #----------------------------------------------------
@@ -400,7 +404,6 @@ function LinksConnected(links,Ntotinput,cc)
         links[u,2] -= countnz(defects.<links[u,2])
     end
     
-    Ntot = ccNblock[1]
     return (Ntot,links)
 end
 ################################################
@@ -421,9 +424,9 @@ end
 doc = """
 
 Usage:
-  dcsbmBIX.jl [-h] <filename> [--Bmax=<Bmax>] [--init=partition...] [--samples=<samples>]
-  dcsbmBIX.jl -h | --help
-  dcsbmBIX.jl --version
+  sbm.jl [-h] <filename> [--dc=<dc>] [--Bmax=<Bmax>] [--init=partition...] [--samples=<samples>]
+  sbm.jl -h | --help
+  sbm.jl --version
   
 
 Options:
@@ -432,16 +435,41 @@ Options:
   --Bmax=<Bmax>             Maximum number of clusters. [default: 6]
   --init=partition...       Initial partition. [default: normalizedLaplacian]
   --samples=<samples>       Number of samples for each initial partition. [default: 10]
+  --dc=<dc>                 Degree correction. [default: true]
   
+
+========================
+Bayesian inference for the stochastic block model using EM algorithm + belief propagation with the leave-one-out cross-validation.
+
++ Inference for the degree-corrected SBM by default. Set `--dc=false` for the standard SBM.
++ Convergence criterion: 10^(-6) per vertex by default.
++ Note that the result varies depending on the initial values of the hyperparameters (cluster size & affinity matrix). 
+To be cautious, try multiple `--init` and many `samples`. 
+To select the initial values of the hyperparameters, specify `--init`. 
+The options for `--init` are 
+	- normalizedLaplacian: Spectral clustering with k-means algorithm. 
+	- random: Equal size clusters & randomly polarized affinity matrix. 
+	- uniformAssortative: Equal size clusters & equal size assortative block structure. 
+	- uniformDisassortative: Equal size clusters & equal size disassortative block structure. 
+
+Examples: 
+Inference of `edgelist.txt` for the standard SBM: 
+julia sbm.jl edgelist.txt --dc=false --Bmax=10 --init={normalizedLaplacian,random} --samples=5
+
+========================
+Author: Tatsuro Kawamoto: kawamoto.tatsuro@gmail.com
+Reference: *****
+
 """
 
 using DocOpt  # import docopt function
 
-args = docopt(doc, version=v"0.0.1")
+args = docopt(doc, version=v"0.0.2")
 strdataset = args["<filename>"]
 Bmax = parse(Int64,args["--Bmax"])
 initialconditions = args["--init"]
 samples = parse(Int64,args["--samples"])
+degreecorrection = args["--dc"]
 
 ######################
 ######################
@@ -460,8 +488,8 @@ samples = parse(Int64,args["--samples"])
 #strdataset = "graph_zachary.txt"
 Ltotinput = countlines(open( strdataset, "r" ))
 fpmeta = open("metadata.txt","w")
-write(fpmeta, "dataset: $(strdataset)\n\n")
-open( strdataset, "r" ) do fp
+write(fpmeta, "dataset: $(strdataset)\n")
+@time open( strdataset, "r" ) do fp
     cnt = 0
     Ntotinput = 0
     links = zeros(Int64,Ltotinput,2)
@@ -478,37 +506,38 @@ open( strdataset, "r" ) do fp
     end
     links = simplegraph(links)
     write(fpmeta, "number of vertices (input): $(Ntotinput)\n")
-    write(fpmeta, "number of edges (input, converted to simple graph): $(Int64(0.5*size(links,1)))\n\n")
+    write(fpmeta, "number of edges (input, converted to simple graph): $(Int64(0.5*size(links,1)))\n")
 
     Nthreshold = round(Ntotinput/2)
-    IPRthreshold = 10/Ntotinput
-    #Bmax = 3
+    #Bmax = 2
     #samples = 10
+	#degreecorrection = false
     #initialconditions = ["normalizedLaplacian","random","uniformAssortative","uniformDisassortative"]
     write(fpmeta, "initial conditions: $(join(initialconditions, ", "))\n")
-    write(fpmeta, "numbmer of samples for each initial condition: $(samples)\n\n")
+    write(fpmeta, "numbmer of samples for each initial condition: $(samples)\n")
+	write(fpmeta, "degree correction: $(degreecorrection)\n")
     
     nb = [links[links[:,1].==lnode,2] for lnode = 1:Ntotinput]
     cc = DFS(nb,1) # Assume node 1 belongs to the connected component
     println("connected component identified...")
     (Ntot,links) = LinksConnected(links,Ntotinput,cc)
     println("nodes & links updated... : Ntot = $(Ntot) 2L = $(size(links,1))")
-    if Ntot < Nthresholddcsbm
+    if Ntot < Nthreshold
         println("This is not a giant component... try again.")
     end
     Ltot = Int64(0.5*size(links,1))
     assignment = zeros(Int64,Ntot,Bmax) # 1st column is the node label, but B starts from 2
     assignment[:,1] = collect(1:Ntot)
     write(fpmeta, "numbmer of vertices (giant component): $(Ntot)\n")
-    write(fpmeta, "numbmer of edges (giant component): $(Ltot)\n\n")
+    write(fpmeta, "numbmer of edges (giant component): $(Ltot)\n")
 
-    strFE = "FE_dcsbm.dat"
-    strCVBayes = "CVBayesPrediction_dcsbm.dat"
-    strCVGP = "CVGibbsPrediction_dcsbm.dat"
-    strCVGT = "CVGibbsTraining_dcsbm.dat"
-    strCVMAP = "CVMAP_dcsbm.dat"
+    strFE = "FE_BayesBP.txt"
+    strCVBayes = "CVBayesPrediction_BayesBP.txt"
+    strCVGP = "CVGibbsPrediction_BayesBP.txt"
+    strCVGT = "CVGibbsTraining_BayesBP.txt"
+    strCVMAP = "CVMAP_BayesBP.txt"
     
-    strPartition = "assignment.dat"
+    strPartition = "partition.txt"
     strParameters = "hyperparameters.txt"
     
     fpFE = open(strFE,"w")
@@ -537,7 +566,6 @@ open( strdataset, "r" ) do fp
         Crsopt = zeros(B,B)
         
         ## upper bound of Crs ===================
-        degrees = degreesequence(nb,Ntot)
         ### If Crs is too large, overflow occurs at logsumexp.
         maxCrs = Ntot
         #println("maxCrs = $(maxCrs)")
@@ -550,7 +578,7 @@ open( strdataset, "r" ) do fp
             overflow = 0
             while sm < samples
                 Crsfail = false
-                (gr,Crs,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,fail,Crsfail,cnv,itrnum) = EM(degrees,Ntot,B,links,maxCrs,initialconditions[init])
+                (gr,Crs,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,fail,Crsfail,cnv,itrnum) = EM(Ntot,B,links,maxCrs,initialconditions[init],degreecorrection)
                 if cnv == false
                     continue
                 end
@@ -560,7 +588,7 @@ open( strdataset, "r" ) do fp
                         println("overflow occurs too often...")
                         break
                     else
-                        #println("overflow...")
+                        println("overflow... trying again")
                         continue
                     end
                 end
@@ -579,7 +607,7 @@ open( strdataset, "r" ) do fp
                     sm += 1
                 end
 
-                println("sample = $(sm)")        
+                println("sm = $(sm)")        
                 FEs[sm,init] = FE
                 CVBayess[sm,init] = CVBayes
                 CVGPs[sm,init] = CVGP
@@ -605,15 +633,6 @@ open( strdataset, "r" ) do fp
         SECVGT = sqrt(varCVGTs[findmin(CVGTs)[2]]/Ltot)
         SECVMAP = sqrt(varCVMAPs[findmin(CVMAPs)[2]]/Ltot)
         
-        println(string(minimum(FEs)))
-        println(string(minimum(CVBayess)))
-        println(string(minimum(CVGPs)))
-        println(string(minimum(CVGTs)))
-        println(string(minimum(CVMAPs)))
-#        println(string(SECVBayes))
-#        println(string(SECVGP))
-#        println(string(SECVGT))
-#        println(string(SECVMAP))
         write(fpFE, string(B)*" "*string(minimum(FEs))*"\n")
         write(fpCVBayes, string(B)*" "*string(minimum(CVBayess))*" "*string(SECVBayes)*"\n")
         write(fpCVGP, string(B)*" "*string(minimum(CVGPs))*" "*string(SECVGP)*"\n")
@@ -625,7 +644,6 @@ open( strdataset, "r" ) do fp
         assignment[:,B] = block # 1st column is the node label, but B starts from 2
         actualB = length(unique(vec(block)))
         write(fpmeta, "q = $(B): actual q = $(actualB), number of iteration = $(itrnumopt)\n")
-#        println("PSIopt = $(PSIopt)")
         write(fpParameters, "q = $(B): \n")
         write(fpParameters, "fractions of block size = \n")
         write(fpParameters, "$(gropt)\n")
