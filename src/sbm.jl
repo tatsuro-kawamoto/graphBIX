@@ -1,5 +1,4 @@
-# version 1.0.2
-
+# --v3 (v 0.2.2)
 function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
 
     function logsumexp(array)
@@ -62,7 +61,6 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
             indsi = sub2ind((Ntot,Ntot),s,i)
             logmessages += log(theta[i]*theta[s]*PSIcav[indsi]*Crs)
         end
-        # logmessages = sum([log(theta[i]*theta[s]*PSIcav[(s,i)]*Crs) for s in nb[i]],1)[1]
         for r = 1:B
             if isnan(gr[r]) == true || gr[r] < 10^(-9.0)
                 gr[r] = 1/Ntot
@@ -77,7 +75,7 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
     function BP()
         conv = 0
         h = update_h()
-        for i = 1:Ntot # i in randperm(Ntot)
+        for i in randperm(Ntot)
             logPSIi = logunnormalizedMessage(i)
             for j in nb[i]
                 indij = sub2ind((Ntot,Ntot),i,j)
@@ -112,11 +110,12 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
         for s = 1:B
             if Crs[r,s] > maxCrs
                 Crs[r,s] = maxCrs
-                Crsfail = true
+            elseif Crs[r,s] < 0
+                Crs[r,s] = 0
             end
         end
         end
-        return (Crs, Crsfail)
+        return Crs
     end
     
     function freeenergy()
@@ -230,7 +229,6 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
     #  initial state #######
     cnv = false
     fail = false
-    Crsfail = false
     itrnum = 0
     Ktot = size(links,1)
     inds = sub2ind((Ntot,Ntot),links[:,1],links[:,2])
@@ -241,7 +239,6 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
     for j = 1:Ntot
         push!(nb,Int64[row[i] for i in nzrange(A,j)])
     end
-    #nb = [links[links[:,1].==lnode,2] for lnode = 1:Ntot]
     # ----------------------------------
     degrees = sum(A,2)
 
@@ -302,10 +299,10 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
         gr = update_gr(PSI)
         for itr = 1:itrmax
             (BPconv, PSI) = BP()
-            (Crs, Crsfail) = update_Crs()
-			if degreecorrection == true
-            	theta = update_theta()
-			end
+            Crs = update_Crs()
+            if degreecorrection == true
+                theta = update_theta()
+            end
             if BPconv < BPconvthreshold
                 #println("converged! ^_^: itr = $(itr)")
 				println(".")
@@ -323,7 +320,7 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
         (FE, CVBayes, CVGP, CVGT, CVMAP, varCVBayes, varCVGP, varCVGT, varCVMAP) = freeenergy()
     end # fail == false or not
     
-    return (gr,Crs,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,fail,Crsfail,cnv,itrnum)
+    return (gr,Crs,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,fail,cnv,itrnum)
 end
 
 
@@ -424,7 +421,7 @@ end
 doc = """
 
 Usage:
-  sbm.jl [-h] <filename> [--dc=<dc>] [--Bmax=<Bmax>] [--init=partition...] [--samples=<samples>]
+  sbm.jl [-h] <filename> [--dc=<dc>] [--q=Blist] [--init=partition...] [--samples=<samples>]
   sbm.jl -h | --help
   sbm.jl --version
   
@@ -432,7 +429,7 @@ Usage:
 Options:
   -h --help                 Show this screen.
   --version                 Show version.
-  --Bmax=<Bmax>             Maximum number of clusters. [default: 6]
+  --q=Blist                 List of number of clusters. [default: 2:6]
   --init=partition...       Initial partition. [default: normalizedLaplacian]
   --samples=<samples>       Number of samples for each initial partition. [default: 10]
   --dc=<dc>                 Degree correction. [default: true]
@@ -453,9 +450,11 @@ The options for `--init` are
 	- uniformDisassortative: Equal size clusters & equal size disassortative block structure. 
 
 Examples: 
-Inference of `edgelist.txt` for the standard SBM: 
-julia sbm.jl edgelist.txt --dc=false --Bmax=10 --init={normalizedLaplacian,random} --samples=5
+Inference of `edgelist.txt` for the standard SBM with q = 2 to 6:
+julia sbm.jl edgelist.txt --dc=false --q=2:6 --init={normalizedLaplacian,random} --samples=5
 
+Inference of `edgelist.txt` for the degree-corrected SBM with q = 2, 4, and 6:
+julia sbm.jl edgelist.txt --dc=true --q=2,4,6 --init={normalizedLaplacian,random} --samples=5
 ========================
 Author: Tatsuro Kawamoto: kawamoto.tatsuro@gmail.com
 Reference: *****
@@ -464,16 +463,24 @@ Reference: *****
 
 using DocOpt  # import docopt function
 
-args = docopt(doc, version=v"0.0.2")
+args = docopt(doc, version=v"0.2.3")
 strdataset = args["<filename>"]
-Bmax = parse(Int64,args["--Bmax"])
+Blist = args["--q"]
 initialconditions = args["--init"]
 samples = parse(Int64,args["--samples"])
 degreecorrection = args["--dc"]
 
+Blistpieces = collect(Blist)
+if Blistpieces[2] == ':'
+    Barray = [parse(Int64,Blistpieces[1]):parse(Int64,Blistpieces[3]);]
+else
+    Barray = Int64[]
+    for bb in split(Blist,",")
+        push!(Barray,parse(Int64,bb))
+    end
+end
 ######################
 ######################
-
 
 
 
@@ -509,13 +516,15 @@ write(fpmeta, "dataset: $(strdataset)\n")
     write(fpmeta, "number of edges (input, converted to simple graph): $(Int64(0.5*size(links,1)))\n")
 
     Nthreshold = round(Ntotinput/2)
-    #Bmax = 2
-    #samples = 10
-	#degreecorrection = false
-    #initialconditions = ["normalizedLaplacian","random","uniformAssortative","uniformDisassortative"]
+    IPRthreshold = 10/Ntotinput
+#    Barray = [2:6;]
+    Bsize = length(Barray)
+#    samples = 10
+#    degreecorrection = false
+#    initialconditions = ["normalizedLaplacian","random","uniformAssortative","uniformDisassortative"]
     write(fpmeta, "initial conditions: $(join(initialconditions, ", "))\n")
     write(fpmeta, "numbmer of samples for each initial condition: $(samples)\n")
-	write(fpmeta, "degree correction: $(degreecorrection)\n")
+    write(fpmeta, "degree correction: $(degreecorrection)\n")
     
     nb = [links[links[:,1].==lnode,2] for lnode = 1:Ntotinput]
     cc = DFS(nb,1) # Assume node 1 belongs to the connected component
@@ -526,18 +535,18 @@ write(fpmeta, "dataset: $(strdataset)\n")
         println("This is not a giant component... try again.")
     end
     Ltot = Int64(0.5*size(links,1))
-    assignment = zeros(Int64,Ntot,Bmax) # 1st column is the node label, but B starts from 2
+    assignment = zeros(Int64,Ntot,Bsize+1) # 1st column is the node label, but B starts from 2
     assignment[:,1] = collect(1:Ntot)
     write(fpmeta, "numbmer of vertices (giant component): $(Ntot)\n")
     write(fpmeta, "numbmer of edges (giant component): $(Ltot)\n")
 
-    strFE = "FE_BayesBP.txt"
-    strCVBayes = "CVBayesPrediction_BayesBP.txt"
-    strCVGP = "CVGibbsPrediction_BayesBP.txt"
-    strCVGT = "CVGibbsTraining_BayesBP.txt"
-    strCVMAP = "CVMAP_BayesBP.txt"
+    strFE = "BetheFreeEnergy_sbm.dat"
+    strCVBayes = "cvBayesPrediction_sbm.dat"
+    strCVGP = "cvGibbsPrediction_sbm.dat"
+    strCVGT = "cvGibbsTraining_sbm.dat"
+    strCVMAP = "cvMAP_sbm.dat"
     
-    strPartition = "partition.txt"
+    strPartition = "assignment.dat"
     strParameters = "hyperparameters.txt"
     
     fpFE = open(strFE,"w")
@@ -548,7 +557,8 @@ write(fpmeta, "dataset: $(strdataset)\n")
     fpPartition = open(strPartition,"w")
     fpParameters = open(strParameters,"w")
 
-    for B = 2:Bmax
+    for bb = 1:Bsize
+        B = Barray[bb]
         println("B = $(B)")
         FEs = zeros(samples,length(initialconditions))
         CVBayess = zeros(samples,length(initialconditions))
@@ -565,11 +575,7 @@ write(fpmeta, "dataset: $(strdataset)\n")
         gropt = zeros(B,1)
         Crsopt = zeros(B,B)
         
-        ## upper bound of Crs ===================
-        ### If Crs is too large, overflow occurs at logsumexp.
         maxCrs = Ntot
-        #println("maxCrs = $(maxCrs)")
-        ##=================================
         
         for init = 1:length(initialconditions)
             println(initialconditions[init])
@@ -577,8 +583,7 @@ write(fpmeta, "dataset: $(strdataset)\n")
             giveup = 0
             overflow = 0
             while sm < samples
-                Crsfail = false
-                (gr,Crs,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,fail,Crsfail,cnv,itrnum) = EM(Ntot,B,links,maxCrs,initialconditions[init],degreecorrection)
+                (gr,Crs,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,fail,cnv,itrnum) = EM(Ntot,B,links,maxCrs,initialconditions[init],degreecorrection)
                 if cnv == false
                     continue
                 end
@@ -588,12 +593,9 @@ write(fpmeta, "dataset: $(strdataset)\n")
                         println("overflow occurs too often...")
                         break
                     else
-                        println("overflow... trying again")
+                        println("overflow... trying again.")
                         continue
                     end
-                end
-                if Crsfail == true # it is ok that Crs goes inf. It should be inf when there is an empty cluster.
-                    #println("Crs reached its upper bound...")
                 end
                 if fail == true
                     giveup += 1
@@ -607,7 +609,7 @@ write(fpmeta, "dataset: $(strdataset)\n")
                     sm += 1
                 end
 
-                println("sm = $(sm)")        
+                #println("sm = $(sm)")        
                 FEs[sm,init] = FE
                 CVBayess[sm,init] = CVBayes
                 CVGPs[sm,init] = CVGP
@@ -641,7 +643,7 @@ write(fpmeta, "dataset: $(strdataset)\n")
 
         (val, ind) = findmax(PSIopt,2)
         block = ind2sub((Ntot,B),vec(ind))[2]
-        assignment[:,B] = block # 1st column is the node label, but B starts from 2
+        assignment[:,bb+1] = block # 1st column is the node label, but B starts from 2
         actualB = length(unique(vec(block)))
         write(fpmeta, "q = $(B): actual q = $(actualB), number of iteration = $(itrnumopt)\n")
         write(fpParameters, "q = $(B): \n")
@@ -664,3 +666,10 @@ write(fpmeta, "dataset: $(strdataset)\n")
 
 end
 close(fpmeta)
+
+# Inputs: 
+#     strdataset
+#     Barray
+#     samples
+#     initialconditions
+#     degreecorrection = true/false [default = true]

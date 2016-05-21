@@ -19,7 +19,7 @@ using DocOpt
 
 For a given edgelist file, e.g. `edgelist.txt`,
 ```
-julia sbmBIX.jl edgelist.txt
+julia sbm.jl edgelist.txt
 ```
 generates the following outputs:
 
@@ -31,14 +31,14 @@ generates the following outputs:
 * assignment.dat:  
 	(i,q)-element indicates the cluster assignments of vertex `i` with the input number of clusters `q`.
 
-* FE_sbm.dat, cvBayesPrediction_sbm.dat, cvGibbsPrediction_sbm.dat, cvGibbsTraining_sbm.dat, cvMAP_sbm.dat:  
+* BetheFreeEnergy_sbm.dat, cvBayesPrediction_sbm.dat, cvGibbsPrediction_sbm.dat, cvGibbsTraining_sbm.dat, cvMAP_sbm.dat:  
 	(q,1)-element indicates the input number of clusters `q`, (q,2) and (q,3)-elements indicate the errors and standard errors with `q`, respectively.
 
 OPTIONS
 ============
 
 ```
-julia sbmBIX.jl -help
+julia sbm.jl -help
 ```
 shows the options and more details.
 
@@ -49,5 +49,5 @@ REFERENCE
 arxiv:xxxxxxx
 
 
-============
-Tatsuro Kawamoto: kawamoto.tatsuro@gmail.com
+============  
+Author: Tatsuro Kawamoto: kawamoto.tatsuro@gmail.com
