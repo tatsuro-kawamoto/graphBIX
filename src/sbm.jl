@@ -294,7 +294,7 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
     
     if fail == false        
         itrmax = 128
-        BPconvthreshold = 0.000001*Ntot
+        BPconvthreshold = 0.000001#*Ntot
         PSI = updatePSI(theta,Crs,h,gr,PSIcav,nb,PSI)
         gr = update_gr(PSI)
         for itr = 1:itrmax
@@ -305,12 +305,12 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
             end
             if BPconv < BPconvthreshold
                 #println("converged! ^_^: itr = $(itr)")
-				println(".")
+				println(". itr = $(itr)")
                 cnv = true
                 itrnum = itr
                 break
             elseif itr == itrmax
-                println("NOT converged... T_T")
+                println("NOT converged: residual = $(Float16(BPconv))")
             end
 			print(".")
         end
@@ -421,7 +421,7 @@ end
 doc = """
 
 Usage:
-  sbm.jl [-h] <filename> [--dc=<dc>] [--q=Blist] [--init=partition...] [--samples=<samples>]
+  sbm.jl <filename> [--dc=<dc>] [--q=Blist] [--init=partition...] [--initnum=<samples>]
   sbm.jl -h | --help
   sbm.jl --version
   
@@ -431,7 +431,7 @@ Options:
   --version                 Show version.
   --q=Blist                 List of number of clusters. [default: 2:6]
   --init=partition...       Initial partition. [default: normalizedLaplacian]
-  --samples=<samples>       Number of samples for each initial partition. [default: 10]
+  --initnum=<samples>       Number of initial states. [default: 10]
   --dc=<dc>                 Degree correction. [default: true]
   
 
@@ -439,9 +439,9 @@ Options:
 Bayesian inference for the stochastic block model using EM algorithm + belief propagation with the leave-one-out cross-validation.
 
 + Inference for the degree-corrected SBM by default. Set `--dc=false` for the standard SBM.
-+ Convergence criterion: 10^(-6) per vertex by default.
++ Convergence criterion = 10^(-6) by default.
 + Note that the result varies depending on the initial values of the hyperparameters (cluster size & affinity matrix). 
-To be cautious, try multiple `--init` and many `samples`. 
+To be cautious, try multiple `--init` and large `initnum`. 
 To select the initial values of the hyperparameters, specify `--init`. 
 The options for `--init` are 
 	- normalizedLaplacian: Spectral clustering with k-means algorithm. 
@@ -451,28 +451,33 @@ The options for `--init` are
 
 Examples: 
 Inference of `edgelist.txt` for the standard SBM with q = 2 to 6:
-julia sbm.jl edgelist.txt --dc=false --q=2:6 --init={normalizedLaplacian,random} --samples=5
+julia sbm.jl edgelist.txt --dc=false --q=2:6 --init={normalizedLaplacian,random} --initnum=5
 
 Inference of `edgelist.txt` for the degree-corrected SBM with q = 2, 4, and 6:
-julia sbm.jl edgelist.txt --dc=true --q=2,4,6 --init={normalizedLaplacian,random} --samples=5
+julia sbm.jl edgelist.txt --dc=true --q=2,4,6 --init={normalizedLaplacian,random} --initnum=5
+or 
+julia sbm.jl edgelist.txt --dc=true --q=2:2:6 --init={normalizedLaplacian,random} --initnum=5
 ========================
 Author: Tatsuro Kawamoto: kawamoto.tatsuro@gmail.com
-Reference: *****
+Reference: arXiv:1605.07915 (2016).
 
 """
 
 using DocOpt  # import docopt function
 
-args = docopt(doc, version=v"0.2.3")
+args = docopt(doc, version=v"0.2.4")
 strdataset = args["<filename>"]
 Blist = args["--q"]
 initialconditions = args["--init"]
-samples = parse(Int64,args["--samples"])
+samples = parse(Int64,args["--initnum"])
 degreecorrection = args["--dc"]
+degreecorrection == "true" ? degreecorrection = true : degreecorrection = false
 
-Blistpieces = collect(Blist)
-if Blistpieces[2] == ':'
-    Barray = [parse(Int64,Blistpieces[1]):parse(Int64,Blistpieces[3]);]
+Blistarray = split(Blist,":")
+if length(Blistarray) == 2
+	Barray = [parse(Int64,Blistarray[1]):parse(Int64,Blistarray[2]);]
+elseif length(Blistarray) == 3
+	Barray = [parse(Int64,Blistarray[1]):parse(Int64,Blistarray[2]):parse(Int64,Blistarray[3]);]
 else
     Barray = Int64[]
     for bb in split(Blist,",")
@@ -494,7 +499,7 @@ end
 
 #strdataset = "graph_zachary.txt"
 Ltotinput = countlines(open( strdataset, "r" ))
-fpmeta = open("metadata.txt","w")
+fpmeta = open("summary.txt","w")
 write(fpmeta, "dataset: $(strdataset)\n")
 @time open( strdataset, "r" ) do fp
     cnt = 0
