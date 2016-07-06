@@ -450,8 +450,7 @@ function AlluvialDiagram(B,block,maxPSIval)
     for md = 1:trueB
         write(fpalluvial, """$(md) "$(moduleindices[md])" $(Float16(0.1/trueB)) $(Float16(0.01/trueB))\n""")
     end
-    write(fpalluvial, "*Insignificants 1\n")
-    write(fpalluvial, "2>1\n")
+    write(fpalluvial, "*Insignificants 0\n")
     write(fpalluvial, "*Nodes $(Ntot)\n")
     sublabel = 0
     labelprev = 0
@@ -613,7 +612,7 @@ Reference: *****
 
 using DocOpt  # import docopt function
 
-args = docopt(doc, version=v"0.0.1")
+args = docopt(doc, version=v"0.0.2")
 strdataset = args["<filename>"]
 Blist = args["--q"]
 learning = args["--learning"]
