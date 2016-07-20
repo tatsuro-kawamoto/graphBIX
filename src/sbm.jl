@@ -1,5 +1,4 @@
-# --v3 (v 0.2.2)
-function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
+function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax)
 
     function logsumexp(array)
         array = vec(sortcols(array))
@@ -293,7 +292,7 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection)
     ###################
     
     if fail == false        
-        itrmax = 128
+        #itrmax = 128
         BPconvthreshold = 0.000001#*Ntot
         PSI = updatePSI(theta,Crs,h,gr,PSIcav,nb,PSI)
         gr = update_gr(PSI)
@@ -421,7 +420,7 @@ end
 doc = """
 
 Usage:
-  sbm.jl <filename> [--dc=<dc>] [--q=Blist] [--init=partition...] [--initnum=<samples>]
+  sbm.jl <filename> [--dc=<dc>] [--q=Blist] [--init=partition...] [--initnum=<samples>] [--itrmax=<itrmax>]
   sbm.jl -h | --help
   sbm.jl --version
   
@@ -433,6 +432,7 @@ Options:
   --init=partition...       Initial partition. [default: normalizedLaplacian]
   --initnum=<samples>       Number of initial states. [default: 10]
   --dc=<dc>                 Degree correction. [default: true]
+  --itrmax=<itrmax>       	Maximum number of BP iteration. [default: 128]
   
 
 ========================
@@ -465,13 +465,14 @@ Reference: arXiv:1605.07915 (2016).
 
 using DocOpt  # import docopt function
 
-args = docopt(doc, version=v"0.2.4")
+args = docopt(doc, version=v"0.2.5")
 strdataset = args["<filename>"]
 Blist = args["--q"]
 initialconditions = args["--init"]
 samples = parse(Int64,args["--initnum"])
 degreecorrection = args["--dc"]
 degreecorrection == "true" ? degreecorrection = true : degreecorrection = false
+itrmax = parse(Int64,args["--itrmax"])
 
 Blistarray = split(Blist,":")
 if length(Blistarray) == 2
@@ -588,7 +589,7 @@ write(fpmeta, "dataset: $(strdataset)\n")
             giveup = 0
             overflow = 0
             while sm < samples
-                (gr,Crs,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,fail,cnv,itrnum) = EM(Ntot,B,links,maxCrs,initialconditions[init],degreecorrection)
+                (gr,Crs,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,fail,cnv,itrnum) = EM(Ntot,B,links,maxCrs,initialconditions[init],degreecorrection,itrmax)
                 if cnv == false
                     continue
                 end
