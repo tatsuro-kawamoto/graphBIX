@@ -1,8 +1,6 @@
-# --v1 (v 0.1.1)
-
 using PyPlot
 
-function EM(Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnoise,learning)
+function EM(gr,Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnoise,learning,priorlearning,dc)
 
     function logsumexp(array)
         array = vec(sortcols(array))
@@ -27,6 +25,10 @@ function EM(Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnoise,l
         h = degrees'*PSI
     end
 
+    function update_gr(PSI)
+        gr = mean(PSI,1)
+    end
+    
     function updatePSI()
         for i = 1:Ntot
             logPSIi = logunnormalizedMessage(i)
@@ -41,7 +43,14 @@ function EM(Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnoise,l
             indsi = sub2ind((Ntot,Ntot),s,i)
             logmessages += log(ones(1,B) + PSIcav[indsi]*(exp(beta)-1))
         end
-        return logmessages - alpha*beta*length(nb[i])*h
+
+        if dc == false
+            logmessages = logmessages - alpha*beta*h + log(gr)
+        else
+            logmessages = logmessages - alpha*beta*length(nb[i])*h + log(gr)
+        end        
+        
+        return logmessages
     end
 
     function BP()
@@ -80,7 +89,11 @@ function EM(Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnoise,l
         end
         dsigmanorm = norm(update_h())^2
         omegain = 2*omegainnew/dsigmanorm
-        omegaout = 2*(0.5*Ktot - omegainnew)/(Ktot^2 - dsigmanorm)
+        if dc == false
+            omegaout = 2*(0.5*Ktot - omegainnew)/(Ntot^2 - dsigmanorm)
+        else
+            omegaout = 2*(0.5*Ktot - omegainnew)/(Ktot^2 - dsigmanorm)
+        end
         
         if omegain > maxomega
             omegain = maxomega
@@ -182,6 +195,10 @@ function EM(Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnoise,l
     excm = (degrees'*degrees)[1]/(Ntot*mean(degrees)) - 1# average excess degree
     beta0 = log(1 + B/(excm-1))
     betaast = log(1 + B/(sqrt(excm)-1))
+    
+    if dc == false
+        degrees = ones(Ntot,1) #### Remove degree-correction #######
+    end
 
     alpha = 1/Ktot
     beta = betaast - betafrac*(betaast - beta0)
@@ -211,20 +228,21 @@ function EM(Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnoise,l
     #BPconvthreshold = 0.00001
     for itr = 1:itrmax
         (BPconv, PSI) = BP()
+        if priorlearning == true
+            gr = update_gr(PSI)
+        end        
         if learning == true
             (omegain, omegaout) = update_omega()
             (alpha, beta) = update_alphabeta()
         end
         if BPconv < BPconvthreshold
-            #println("converged! ^_^: itr = $(itr)")
-			println(". itr = $(itr)")
+            println("converged! ^_^: itr = $(itr)")
             cnv = true
             itrnum = itr
             break
         elseif itr == itrmax
-            println("NOT converged: residual = $(Float16(BPconv))")
+            println("NOT converged... T_T: BPconv = $(Float16(BPconv))")
         end
-		print(".")
     end
 
     h = update_h()
@@ -579,7 +597,7 @@ end
 doc = """
 
 Usage:
-  mod.jl <filename> [--q=Blist] [--learning=learning] [--alluvial=alluvial] [--initnum=<samples>] [--itrmax=<itrmax>] [--conv=<BPconvthreshold>] [--noise=<initialnoise>]
+  mod.jl <filename> [--q=Blist] [--dc=dc] [--learning=learning] [--prior=priorlearning] [--alluvial=alluvial] [--initnum=<samples>] [--itrmax=<itrmax>] [--conv=<BPconvthreshold>] [--noise=<initialnoise>]
   mod.jl -h | --help
   mod.jl --version
   
@@ -588,7 +606,9 @@ Options:
   -h --help                 	Show this screen.
   --version                 	Show version.
   --q=Blist                 	List of number of clusters. [default: 2:6]
-  --learning=learning           Learn hyperparameters. [default: true]
+  --dc=dc           			Fit the degree-corrected SBM. [default: true]  
+  --learning=learning           Learn affinity matrix. [default: true]
+  --prior=priorlearning         Learn cluster sizes. [default: false]
   --alluvial=alluvial           Generate smap files for the Alluvial diagram. [default: false]
   --initnum=<samples>       	Number of initial states. [default: 3]
   --itrmax=<itrmax>         	Maximum number of iterations in BP. [default: 128]
@@ -606,17 +626,21 @@ or
 julia mod.jl edgelist.txt --q=2:2:6
 ========================
 Author: Tatsuro Kawamoto: kawamoto.tatsuro@gmail.com
-Reference: *****
+Reference: Tatsuro Kawamoto and Yoshiyuki Kabashima, arXiv:1606.07668 (2016).
 
 """
 
 using DocOpt  # import docopt function
 
-args = docopt(doc, version=v"0.0.2")
+args = docopt(doc, version=v"0.1.3")
 strdataset = args["<filename>"]
 Blist = args["--q"]
+dc = args["--dc"]
+dc == "true" ? dc = true : dc = false
 learning = args["--learning"]
 learning == "true" ? learning = true : learning = false
+priorlearning = args["--prior"]
+priorlearning == "true" ? priorlearning = true : priorlearning = false
 alluvial = args["--alluvial"]
 alluvial == "true" ? alluvial = true : alluvial = false
 samples = parse(Int64,args["--initnum"])
@@ -677,6 +701,8 @@ open( strdataset, "r" ) do fp
 
     Nthreshold = round(Ntotinput/2)
     IPRthreshold = 10/Ntotinput
+#	dc = true # degree-correction
+#	priorlearning = false
     plots = true
 #    learning = true
     spectral = true
@@ -763,6 +789,8 @@ open( strdataset, "r" ) do fp
         omegaopt = zeros(2)
         alphabetaopt = zeros(2)
                 
+        gr = ones(1,B)/B # prior distribution
+		
         ## upper bound of omega ===================
         maxomega = 1
         ##=================================
@@ -770,7 +798,7 @@ open( strdataset, "r" ) do fp
         sm = 0
         overflow = 0
         while sm < samples
-            (excm,alpha,beta,omegain,omegaout,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,cnv,itrnum) = EM(Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnoise,learning)
+            (excm,alpha,beta,omegain,omegaout,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,cnv,itrnum) = EM(gr,Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnoise,learning,priorlearning,dc)
             if cnv == false
                 betafrac += 0.1
                 if betafrac <= 1
