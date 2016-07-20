@@ -62,6 +62,7 @@ shows the options and more details.
 REFERENCE
 ============
 sbm.jl: Tatsuro Kawamoto and Yoshiyuki Kabashima, arXiv:1605.07915 (2016).
+
 mod.jl: Tatsuro Kawamoto and Yoshiyuki Kabashima, arXiv:1606.07668 (2016).
 
 ============  
