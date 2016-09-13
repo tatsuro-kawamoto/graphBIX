@@ -1,4 +1,6 @@
-function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax)
+using PyPlot
+
+function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax,priorlearning,learningrate)
 
     function logsumexp(array)
         array = vec(sortcols(array))
@@ -84,12 +86,16 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax)
             end
             
             hprev = theta[i]*PSI[i,:]*Crs/Ntot
-            grprev = PSI[i,:]/Ntot
+			if priorlearning == true
+            	grprev = PSI[i,:]/Ntot
+			end
             prev = PSI[i,:]/Ntot
             logPSIi = logunnormalizedMessage(i) # new PSI with new PSIcav
             PSI[i,:] = normalize_logprob(logPSIi)
             h += theta[i]*PSI[i,:]*Crs/Ntot - hprev
-            gr += PSI[i,:]/Ntot - grprev
+			if priorlearning == true
+				gr += PSI[i,:]/Ntot - grprev # learningrate omitted here: learning rate is much slower than Crs if learningrate is included.
+			end
             conv += sum(abs(PSI[i,:]/Ntot - prev))
         end
         return (conv, PSI)
@@ -104,7 +110,7 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax)
             ccrs = theta[i]*theta[j]*PSIcav[indij]'*PSIcav[indji].*Crs
             Crsnew += ccrs/sum(ccrs)
         end
-        Crs = Crsnew ./ (Ntot*gr'*gr)
+        Crs = learningrate*Crsnew./(Ntot*gr'*gr) + (1-learningrate)*Crs
         for r = 1:B
         for s = 1:B
             if Crs[r,s] > maxCrs
@@ -262,6 +268,10 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax)
         gr = ones(B)'/B
     end
 
+    if priorlearning == false
+        gr = ones(B)'/B
+	end
+	
     for r = 1:B
     for s = 1:B
         if isnan(Crs[r,s]) == true || abs(Crs[r,s]) == Inf
@@ -309,7 +319,11 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax)
                 itrnum = itr
                 break
             elseif itr == itrmax
-                println("NOT converged: residual = $(Float16(BPconv))")
+                if isnan(maximum(gr)) == true || isnan(maximum(Crs)) == true || maximum(PSI) == Inf
+                    println("overflow : Use different initial partition or modify maxCrs.")
+                else
+                    println("NOT converged: residual = $(Float16(BPconv))")
+                end
             end
 			print(".")
         end
@@ -408,7 +422,93 @@ end
 
 
 
+function PlotAssessments(x,y0,y1,y1error,y2,y2error,y3,y3error,y4,y4error,dataset)
+    Bmin = minimum(x)
+    Bmax = maximum(x)
+    
+    fig = figure("plot_$(dataset)",figsize=(4,6))
+#    subplots_adjust(hspace=0.5,wspace=0.3)
+    subplots_adjust(hspace=0.1) # Set the vertical spacing between axes
 
+    # 1st fig --------
+    subplot(211)
+    p = plot(x,y0,color="0.4",linestyle="-",marker="8",markeredgecolor="None",markersize=8,label="Bethe free energy")
+    ax = gca()
+	setp(ax[:get_xticklabels](),visible=false) # Disable x tick labels
+    font1 = Dict("color"=>"k")
+    ylabel("Bethe free energy",fontdict=font1)
+    setp(ax[:get_yticklabels](),color="0.2") # Y Axis font formatting
+#    xlabel(L"Number of clusters $\, \mathit{q}$",fontdict=font1)
+    ax[:set_xlim](Bmin-0.2,Bmax+0.2)
+    Mx = matplotlib[:ticker][:MultipleLocator](1) # Define interval
+    ax[:xaxis][:set_major_locator](Mx) # Set interval 
+
+    # 2nd fig --------
+    subplot(212)
+    p = plot(x,y2,color="#27AE60",linestyle="-",linewidth=2,marker="^",markersize=8,markerfacecolor="white",markeredgecolor="#27AE60",markeredgewidth=1.5,zorder=10,label="EGP")
+    p = fill_between(x,vec(y2-y2error),vec(y2+y2error),color="#2ECC71",alpha=0.7,edgecolor="None",zorder=9)
+    p = plot(x,y1,color="#C0392B",linestyle="-",linewidth=2,marker="o",markersize=7,markerfacecolor="white",markeredgecolor="#C0392B",markeredgewidth=1.5,zorder=8,label="EBayes")
+    p = fill_between(x,vec(y1-y1error),vec(y1+y1error),color="#E74C3C",alpha=0.7,edgecolor="None",zorder=7)
+    p = plot(x,y3,color="#2980B9",linestyle="-",linewidth=2,marker="D",markersize=7,markerfacecolor="white",markeredgecolor="#2980B9",markeredgewidth=1.5,zorder=6,label="EGT")
+    p = fill_between(x,vec(y3-y3error),vec(y3+y3error),color="#3498DB",alpha=0.7,edgecolor="None",zorder=5)
+    p = plot(x,y4,color="#F39C12",linestyle="-",linewidth=2,marker="s",markersize=7,markerfacecolor="white",markeredgecolor="#F39C12",markeredgewidth=1.5,zorder=4,label="EMAP")
+    p = fill_between(x,vec(y4-y4error),vec(y4+y4error),color="#F1C40F",alpha=0.7,edgecolor="None",zorder=3)
+    ax = gca()
+    font1 = Dict("color"=>"k")
+    ylabel("Prediction/training error",fontdict=font1)
+    setp(ax[:get_yticklabels](),color="k") # Y Axis font formatting
+    ax[:set_xlim](Bmin-0.2,Bmax+0.2)
+    xlabel(L"Number of clusters $\, \mathit{q}$",fontdict=font1)
+    Mx = matplotlib[:ticker][:MultipleLocator](1) # Define interval
+    ax[:xaxis][:set_major_locator](Mx) # Set interval 
+
+    axis("tight")
+
+#    fig[:canvas][:draw]() # Update the figure
+    suptitle(dataset,fontdict=font1)
+    savefig("assessment_$(dataset).pdf",bbox_inches="tight",pad_inches=0.1)
+end
+
+
+function grCrsMatrices(grDictbb,CrsDictbb)
+    B = length(grDictbb)
+    Binmax = 100
+    grCrsMatrix = zeros(Binmax,Binmax)
+    binsizes = floor(Int64,Binmax*grDictbb)
+    offsetr = 0
+    for r = 1:B
+        offsets = 0
+        for s = 1:B
+            if r == B && s < B
+                grCrsMatrix[offsetr+1:Binmax,offsets+1:offsets+binsizes[s]] = CrsDictbb[r,s]
+            elseif r < B && s == B
+                grCrsMatrix[offsetr+1:offsetr+binsizes[r],offsets+1:Binmax] = CrsDictbb[r,s]
+            elseif r == B && s == B
+                grCrsMatrix[offsetr+1:Binmax,offsets+1:Binmax] = CrsDictbb[r,s]
+            else
+                grCrsMatrix[offsetr+1:offsetr+binsizes[r],offsets+1:offsets+binsizes[s]] = CrsDictbb[r,s]
+            end
+            offsets += binsizes[s]
+        end
+        offsetr += binsizes[r]
+    end
+    return grCrsMatrix
+end
+
+
+function PlotAffinityMatrix(Bsize,grDict,CrsDict,dataset)
+    plt = PyPlot
+    fig=plt.figure(figsize=(2*Bsize, 2))
+    for bb = 1:Bsize
+        ax = fig[:add_subplot](1,Bsize,bb)
+        grCrsMatrix = grCrsMatrices(grDict[bb],CrsDict[bb])
+        plt.imshow(grCrsMatrix,interpolation="nearest",cmap=ColorMap("Blues"))
+        setp(ax[:get_xticklabels](),visible=false) # Disable x tick labels
+        setp(ax[:get_yticklabels](),visible=false) # Disable y tick labels
+    end
+#    fig[:canvas][:draw]() # Update the figure
+    savefig("structures_$(dataset).pdf",bbox_inches="tight",pad_inches=0.1)
+end
 
 
 
@@ -420,20 +520,22 @@ end
 doc = """
 
 Usage:
-  sbm.jl <filename> [--dc=<dc>] [--q=Blist] [--init=partition...] [--initnum=<samples>] [--itrmax=<itrmax>]
+  sbm.jl <filename> [--dataset=<dataset>] [--dc=<dc>] [--q=Blist] [--init=partition...] [--initnum=<samples>] [--itrmax=<itrmax>] [--learning_rate=<learningrate>] [--prior=priorlearning]
   sbm.jl -h | --help
   sbm.jl --version
   
 
 Options:
-  -h --help                 Show this screen.
-  --version                 Show version.
-  --q=Blist                 List of number of clusters. [default: 2:6]
-  --init=partition...       Initial partition. [default: normalizedLaplacian]
-  --initnum=<samples>       Number of initial states. [default: 10]
-  --dc=<dc>                 Degree correction. [default: true]
-  --itrmax=<itrmax>       	Maximum number of BP iteration. [default: 128]
-  
+  -h --help                 		Show this screen.
+  --version                 		Show version.
+  --dataset							Name of the dataset [default: ""]
+  --q=Blist                 		List of number of clusters. [default: 2:6]
+  --init=partition...       		Initial partition. [default: normalizedLaplacian]
+  --initnum=<samples>       		Number of initial states. [default: 10]
+  --dc=<dc>                 		Degree correction. [default: true]
+  --itrmax=<itrmax>       			Maximum number of BP iteration. [default: 128]
+  --prior=priorlearning     		Learn cluster sizes. [default: true]
+  --learning_rate=<learningrate>	Learning rate. [default: 1]
 
 ========================
 Bayesian inference for the stochastic block model using EM algorithm + belief propagation with the leave-one-out cross-validation.
@@ -444,7 +546,7 @@ Bayesian inference for the stochastic block model using EM algorithm + belief pr
 To be cautious, try multiple `--init` and large `initnum`. 
 To select the initial values of the hyperparameters, specify `--init`. 
 The options for `--init` are 
-	- normalizedLaplacian: Spectral clustering with k-means algorithm. 
+	- normalizedLaplacian: Spectral clustering with the normalized Laplacian + k-means algorithm. 
 	- random: Equal size clusters & randomly polarized affinity matrix. 
 	- uniformAssortative: Equal size clusters & equal size assortative block structure. 
 	- uniformDisassortative: Equal size clusters & equal size disassortative block structure. 
@@ -465,14 +567,18 @@ Reference: arXiv:1605.07915 (2016).
 
 using DocOpt  # import docopt function
 
-args = docopt(doc, version=v"0.2.5")
+args = docopt(doc, version=v"0.2.6") #0.2.6.3
 strdataset = args["<filename>"]
+dataset = args["--dataset"]
 Blist = args["--q"]
 initialconditions = args["--init"]
 samples = parse(Int64,args["--initnum"])
 degreecorrection = args["--dc"]
 degreecorrection == "true" ? degreecorrection = true : degreecorrection = false
 itrmax = parse(Int64,args["--itrmax"])
+learningrate = parse(Float32,args["--learning_rate"])
+priorlearning = args["--prior"]
+priorlearning == "true" ? priorlearning = true : priorlearning = false
 
 Blistarray = split(Blist,":")
 if length(Blistarray) == 2
@@ -493,12 +599,8 @@ end
 
 
 
-
-
-
-
-
-#strdataset = "graph_zachary.txt"
+#strdataset = "polbooks_newman.txt"
+#dataset = "political books"
 Ltotinput = countlines(open( strdataset, "r" ))
 fpmeta = open("summary.txt","w")
 write(fpmeta, "dataset: $(strdataset)\n")
@@ -522,15 +624,20 @@ write(fpmeta, "dataset: $(strdataset)\n")
     write(fpmeta, "number of edges (input, converted to simple graph): $(Int64(0.5*size(links,1)))\n")
 
     Nthreshold = round(Ntotinput/2)
-    IPRthreshold = 10/Ntotinput
-#    Barray = [2:6;]
+#    Barray = [2:8;]
     Bsize = length(Barray)
 #    samples = 10
 #    degreecorrection = false
 #    initialconditions = ["normalizedLaplacian","random","uniformAssortative","uniformDisassortative"]
+#    learningrate = 0.3
+#    itrmax = 1024
+#    priorlearning = true
     write(fpmeta, "initial conditions: $(join(initialconditions, ", "))\n")
     write(fpmeta, "numbmer of samples for each initial condition: $(samples)\n")
     write(fpmeta, "degree correction: $(degreecorrection)\n")
+    write(fpmeta, "maximum number of iteration: $(itrmax)\n")
+    write(fpmeta, "cluster size learning: $(priorlearning)\n")
+    write(fpmeta, "learning rate: $(learningrate)\n")
     
     nb = [links[links[:,1].==lnode,2] for lnode = 1:Ntotinput]
     cc = DFS(nb,1) # Assume node 1 belongs to the connected component
@@ -546,35 +653,29 @@ write(fpmeta, "dataset: $(strdataset)\n")
     write(fpmeta, "numbmer of vertices (giant component): $(Ntot)\n")
     write(fpmeta, "numbmer of edges (giant component): $(Ltot)\n")
 
-    strFE = "BetheFreeEnergy_sbm.dat"
-    strCVBayes = "cvBayesPrediction_sbm.dat"
-    strCVGP = "cvGibbsPrediction_sbm.dat"
-    strCVGT = "cvGibbsTraining_sbm.dat"
-    strCVMAP = "cvMAP_sbm.dat"
+    fpAssessment = open("assessment.txt","w")
+    fpPartition = open("assignment.txt","w")
     
-    strPartition = "assignment.dat"
-    strParameters = "hyperparameters.txt"
+    FEvec = zeros(Bsize,1)
+    CVBayesvec = zeros(Bsize,2)
+    CVGPvec = zeros(Bsize,2)
+    CVGTvec = zeros(Bsize,2)
+    CVMAPvec = zeros(Bsize,2)
+    grDict = Dict()
+    CrsDict = Dict()
     
-    fpFE = open(strFE,"w")
-    fpCVBayes = open(strCVBayes,"w")
-    fpCVGP = open(strCVGP,"w")
-    fpCVGT = open(strCVGT,"w")
-    fpCVMAP = open(strCVMAP,"w")
-    fpPartition = open(strPartition,"w")
-    fpParameters = open(strParameters,"w")
-
     for bb = 1:Bsize
         B = Barray[bb]
         println("B = $(B)")
-        FEs = zeros(samples,length(initialconditions))
-        CVBayess = zeros(samples,length(initialconditions))
-        CVGPs = zeros(samples,length(initialconditions))
-        CVGTs = zeros(samples,length(initialconditions))
-        CVMAPs = zeros(samples,length(initialconditions))
-        varCVBayess = zeros(samples,length(initialconditions))
-        varCVGPs = zeros(samples,length(initialconditions))
-        varCVGTs = zeros(samples,length(initialconditions))
-        varCVMAPs = zeros(samples,length(initialconditions))
+        FEs = 100*ones(samples,length(initialconditions))
+        CVBayess = 100*ones(samples,length(initialconditions))
+        CVGPs = 100*ones(samples,length(initialconditions))
+        CVGTs = 100*ones(samples,length(initialconditions))
+        CVMAPs = 100*ones(samples,length(initialconditions))
+        varCVBayess = 100*ones(samples,length(initialconditions))
+        varCVGPs = 100*ones(samples,length(initialconditions))
+        varCVGTs = 100*ones(samples,length(initialconditions))
+        varCVMAPs = 100*ones(samples,length(initialconditions))
         FEmin = 0
         itrnumopt = 0
         PSIopt = zeros(Ntot,B)
@@ -584,19 +685,19 @@ write(fpmeta, "dataset: $(strdataset)\n")
         maxCrs = Ntot
         
         for init = 1:length(initialconditions)
-            println(initialconditions[init])
+            println("Initial partition = $(initialconditions[init])")
             sm = 0
             giveup = 0
             overflow = 0
             while sm < samples
-                (gr,Crs,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,fail,cnv,itrnum) = EM(Ntot,B,links,maxCrs,initialconditions[init],degreecorrection,itrmax)
+                (gr,Crs,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,fail,cnv,itrnum) = EM(Ntot,B,links,maxCrs,initialconditions[init],degreecorrection,itrmax,priorlearning,learningrate)
                 if cnv == false
                     continue
                 end
-                if isnan(maximum(PSI)) == true || maximum(PSI) == Inf || abs(FE) == Inf || abs(CVGP) == Inf || abs(CVMAP) == Inf
+                if isnan(maximum(gr)) == true || isnan(maximum(Crs)) == true || maximum(PSI) == Inf
                     overflow += 1
-                    if overflow > 10
-                        println("overflow occurs too often...")
+                    if overflow > 2
+                        println("overflow occurs too often : Use different initial partition or modifiy maxCrs.")
                         break
                     else
                         println("overflow... trying again.")
@@ -605,7 +706,7 @@ write(fpmeta, "dataset: $(strdataset)\n")
                 end
                 if fail == true
                     giveup += 1
-                    if giveup > 10
+                    if giveup > 2
                         println("too many fails: give up!")
                         break
                     else
@@ -641,41 +742,92 @@ write(fpmeta, "dataset: $(strdataset)\n")
         SECVGT = sqrt(varCVGTs[findmin(CVGTs)[2]]/Ltot)
         SECVMAP = sqrt(varCVMAPs[findmin(CVMAPs)[2]]/Ltot)
         
-        write(fpFE, string(B)*" "*string(minimum(FEs))*"\n")
-        write(fpCVBayes, string(B)*" "*string(minimum(CVBayess))*" "*string(SECVBayes)*"\n")
-        write(fpCVGP, string(B)*" "*string(minimum(CVGPs))*" "*string(SECVGP)*"\n")
-        write(fpCVGT, string(B)*" "*string(minimum(CVGTs))*" "*string(SECVGT)*"\n")
-        write(fpCVMAP, string(B)*" "*string(minimum(CVMAPs))*" "*string(SECVMAP)*"\n")
+        FEvec[bb] = minimum(FEs)
+        CVBayesvec[bb,1] = minimum(CVBayess)
+        CVBayesvec[bb,2] = SECVBayes
+        CVGPvec[bb,1] = minimum(CVGPs)
+        CVGPvec[bb,2] = SECVGP
+        CVGTvec[bb,1] = minimum(CVGTs)
+        CVGTvec[bb,2] = SECVGT
+        CVMAPvec[bb,1] = minimum(CVMAPs)
+        CVMAPvec[bb,2] = SECVMAP
+        grDict[bb] = gropt
+        CrsDict[bb] = Crsopt
 
         (val, ind) = findmax(PSIopt,2)
         block = ind2sub((Ntot,B),vec(ind))[2]
         assignment[:,bb+1] = block # 1st column is the node label, but B starts from 2
         actualB = length(unique(vec(block)))
         write(fpmeta, "q = $(B): actual q = $(actualB), number of iteration = $(itrnumopt)\n")
-        write(fpParameters, "q = $(B): \n")
-        write(fpParameters, "fractions of block size = \n")
-        write(fpParameters, "$(gropt)\n")
-        write(fpParameters, "rescaled affinity matrix C = \n")
-        write(fpParameters, "$(Crsopt)\n")
     end # B-loop
+    
+    # OUTPUT RESULTS :::::::::::::::::::::::::::::::::::::::::::::::::
     for i = 1:Ntot
         write(fpPartition, join(assignment[i,:], " ")*"\n")
     end
 
-    close(fpFE)
-    close(fpCVBayes)
-    close(fpCVGP)
-    close(fpCVGT)
-    close(fpCVMAP)
+    write(fpAssessment, "Bethe free energy:\n")
+    write(fpAssessment, "(q, assessed value)\n")
+    for bb = 1:Bsize
+        B = Barray[bb]
+        write(fpAssessment, string(B)*" $(FEvec[bb])\n")
+    end
+    write(fpAssessment, "\nBayes prediction error:\n")
+    write(fpAssessment, "(q, assessed value, standard error)\n")
+    for bb = 1:Bsize
+        B = Barray[bb]
+        write(fpAssessment, "$(B) $(CVBayesvec[bb,1]) $(CVBayesvec[bb,2])\n")
+    end
+    write(fpAssessment, "\nGibbs prediction error:\n")
+    write(fpAssessment, "(q, assessed value, standard error)\n")
+    for bb = 1:Bsize
+        B = Barray[bb]
+        write(fpAssessment,"$(B) $(CVGPvec[bb,1]) $(CVGPvec[bb,2])\n")
+    end
+    write(fpAssessment, "\nGibbs training error:\n")
+    write(fpAssessment, "(q, assessed value, standard error)\n")
+    for bb = 1:Bsize
+        B = Barray[bb]
+        write(fpAssessment,"$(B) $(CVGTvec[bb,1]) $(CVGTvec[bb,2])\n")
+    end
+    write(fpAssessment, "\nGibbs prediction error (MAP estimate):\n")
+    write(fpAssessment, "(q, assessed value, standard error)\n")
+    for bb = 1:Bsize
+        B = Barray[bb]
+        write(fpAssessment,"$(B) $(CVMAPvec[bb,1]) $(CVMAPvec[bb,2])\n")
+    end
+    write(fpAssessment, "\nCluster sizes:\n")
+    for bb = 1:Bsize
+        B = Barray[bb]
+        write(fpAssessment,"q = $(B)\n")
+        write(fpAssessment,"$(grDict[bb])\n")
+    end
+    write(fpAssessment, "\nRescaled affinity matrix C:\n")
+    for bb = 1:Bsize
+        B = Barray[bb]
+        write(fpAssessment,"q = $(B)\n")
+        write(fpAssessment,"$(CrsDict[bb])\n")
+    end
+    #::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+    
+    # PLOT RESULTS .................................................
+    x = Barray
+    y0 = FEvec
+    y1 = CVBayesvec[:,1]
+    y1error = CVBayesvec[:,2]
+    y2 = CVGPvec[:,1]
+    y2error = CVGPvec[:,2]
+    y3 = CVGTvec[:,1]
+    y3error = CVGTvec[:,2]
+    y4 = CVMAPvec[:,1]
+    y4error = CVMAPvec[:,2]    
+    PlotAssessments(x,y0,y1,y1error,y2,y2error,y3,y3error,y4,y4error,dataset)
+
+    PlotAffinityMatrix(Bsize,grDict,CrsDict,dataset)
+    #..........................................................................
+    
+    close(fpAssessment)
     close(fpPartition)
-    close(fpParameters)
 
 end
 close(fpmeta)
-
-# Inputs: 
-#     strdataset
-#     Barray
-#     samples
-#     initialconditions
-#     degreecorrection = true/false [default = true]
