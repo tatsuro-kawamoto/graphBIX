@@ -3,12 +3,9 @@ using PyPlot
 function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax,priorlearning,learningrate)
 
     function logsumexp(array)
-        array = vec(sortcols(array))
-        for j = 1:length(array)
-            array[end] - array[1] > log(10^(16.0)) ? shift!(array) : break # this cutoff must be smaller than cutoff in normalize_logprob: e.g. all elements are below cutoff.
-        end
+        array = vec(sortcols(array'))
         if maximum(array) - minimum(array) > 700
-            println("overflow or underflow is UNAVOIDABLE: restrict Crs to smaller values.")
+            println("overflow or underflow is UNAVOIDABLE: restrict omega to smaller values.")
         end
         array[1] + log(sum(exp(array - vec(ones(1,length(array)))*array[1])))
     end
@@ -18,7 +15,7 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax,priorlearning,le
         for r = 1:arraylength
             array[r] < log(10^(-8.0)) ? array[r] = log(10^(-8.0)) : continue
         end
-        exp(array -logsumexp(array)*ones(1,arraylength))
+        exp(array - logsumexp(array)*ones(1,arraylength))
     end
     
     function update_theta()
@@ -85,18 +82,18 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax,priorlearning,le
                 PSIcav[indij] = normalize_logprob(PSIcav[indij])
             end
             
-            hprev = theta[i]*PSI[i,:]*Crs/Ntot
+            hprev = theta[i]*PSI[i,:]'*Crs/Ntot
 			if priorlearning == true
-            	grprev = PSI[i,:]/Ntot
+            	grprev = PSI[i,:]'/Ntot
 			end
-            prev = PSI[i,:]/Ntot
+            prev = PSI[i,:]'/Ntot
             logPSIi = logunnormalizedMessage(i) # new PSI with new PSIcav
             PSI[i,:] = normalize_logprob(logPSIi)
-            h += theta[i]*PSI[i,:]*Crs/Ntot - hprev
+            h += theta[i]*PSI[i,:]'*Crs/Ntot - hprev
 			if priorlearning == true
-				gr += PSI[i,:]/Ntot - grprev # learningrate omitted here: learning rate is much slower than Crs if learningrate is included.
+				gr += PSI[i,:]'/Ntot - grprev # learningrate omitted here: learning rate is much slower than Crs if learningrate is included.
 			end
-            conv += sum(abs(PSI[i,:]/Ntot - prev))
+            conv += sum(abs(PSI[i,:]'/Ntot - prev))
         end
         return (conv, PSI)
     end
@@ -174,11 +171,11 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax,priorlearning,le
         end
         avedegree = gr*Crs*gr' # average degree is obtained by the same eqn. as the standard SBM.
         
-        FE = -((sumlogZi - sum(logZijs))/Ntot + 0.5*avedegree[1] - 0.5*avedegree[1]*log(Ntot)) # - 0.5*avedegree[1]*log(Ntot) is due to the difference of the def. of Zij
-        CVBayes = -sum(logZijs)/Ltot #+ 0.5*avedegree[1]
-        CVGP = -sum(CVGPs)/Ltot #+ 0.5*avedegree[1]
-        CVGT = -sum(CVGTs)/Ltot #+ 0.5*avedegree[1] 
-        CVMAP = -sum(CVMAPs)/Ltot #+ 0.5*avedegree[1]
+        FE = -((sumlogZi - sum(logZijs))/Ntot + 0.5*avedegree[1])
+        CVBayes = 1-sum(logZijs)/Ltot
+        CVGP = 1-sum(CVGPs)/Ltot
+        CVGT = 1-sum(CVGTs)/Ltot
+        CVMAP = 1-sum(CVMAPs)/Ltot
         varCVBayes = var(logZijs) # unbiased variance
         varCVGP = var(CVGPs)
         varCVGT = var(CVGTs)
@@ -229,7 +226,7 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax,priorlearning,le
         Crs = Crs./(Ntot*(grkmeans'*grkmeans))
         return (grkmeans, Crs)
     end
-    
+
     
     #  initial state #######
     cnv = false
@@ -261,10 +258,16 @@ function EM(Ntot,B,links,maxCrs,initial,degreecorrection,itrmax,priorlearning,le
         Crs = RandMat + RandMat'
         gr = ones(B)'/B
     elseif initial == "uniformAssortative"
-        Crs = 10*eye(B) + 0.01*ones(B)*ones(B)'
+        Crs = 20*eye(B) + 0.01*ones(B)*ones(B)'
         gr = ones(B)'/B
     elseif initial == "uniformDisassortative"
         Crs = -9.9*eye(B) + 10*ones(B)*ones(B)'
+        gr = ones(B)'/B
+    elseif initial == "Bipartite"
+        halfB = round(Int64,B/2)
+        layer1 = [0 1;1 0]
+        layer2 = 20*eye(halfB) + 0.01*ones(halfB)*ones(halfB)'
+        Crs = kron(layer1,layer2)
         gr = ones(B)'/B
     end
 
@@ -338,22 +341,9 @@ end
 
 
 
-
-
-################################################
-function simplegraph(links)
-    links = vcat(links,hcat(links[:,2],links[:,1]))
-    links = unique(links,1)
-    # remove self-loops
-    boolean = trues(size(links,1))
-    for i = 1:size(links,1)
-        links[i,1] == links[i,2] ? boolean[i] = false : continue
-    end
-    links = links[boolean,:]
-    
-    return links
-end
-
+###############################
+# Spectral 
+###############################
 function Laplacian(links,Ntot,B)
     shift = 1000
     Ktot = size(links,1)
@@ -365,6 +355,43 @@ function Laplacian(links,Ntot,B)
     (eigenvalues,V) = eigs(L,nev=B,which=:LM)#,maxiter=1000,v0=rand(Ntot))
     eigenvalues = eigenvalues + shift
     return (eigenvalues,V)
+end
+
+function nonbacktracking(links,degrees,Ntot,Bmax)
+    Ktot = size(links,1)
+    A = sparse(Ntot+links[:,1],Ntot+links[:,2],ones(Ktot),2*Ntot,2*Ntot)
+    NB12block = sparse(collect(1:Ntot),collect(Ntot+1:2*Ntot),degrees[:,1]-ones(Ntot),2*Ntot,2*Ntot)
+    NB21block = sparse(collect(Ntot+1:2*Ntot),collect(1:Ntot),-ones(Ntot),2*Ntot,2*Ntot)
+    NBT = A + NB12block + NB21block
+    (eigenvalues,V) = eigs(NBT,nev=Bmax,which=:LR)
+    return (eigenvalues,V)
+end
+###############################
+# END: Spectral
+###############################
+
+
+###############################
+# Miscellaneous Functions
+###############################
+function degreesequence(links,Ntot)
+    Ktot = size(links,1)
+    A = sparse(links[:,1],links[:,2],ones(Ktot),Ntot,Ntot)
+    degrees = sum(A,2)
+    return degrees
+end
+
+function simplegraph(links)
+    links = vcat(links,hcat(links[:,2],links[:,1]))
+    links = unique(links,1)
+    # remove self-loops
+    boolean = trues(size(links,1))
+    for i = 1:size(links,1)
+        links[i,1] == links[i,2] ? boolean[i] = false : continue
+    end
+    links = links[boolean,:]
+    
+    return links
 end
 
 function DFS(nb,root)
@@ -416,35 +443,135 @@ function LinksConnected(links,Ntotinput,cc)
     
     return (Ntot,links)
 end
-################################################
+
+function UniformGraphError(links,Ntot,degreecorrection)
+    Ktot = size(links,1)
+    A = sparse(links[:,1],links[:,2],ones(Ktot),Ntot,Ntot)
+    degrees = sum(A,2)
+	if degreecorrection == true
+		nullerror = 0
+		for di in degrees
+			nullerror += di*log(di)
+		end
+		nullerror = 1 + log(Ktot) - 2*nullerror/Ktot 
+	else
+		nullerror = 1 - log(Ktot/(Ntot*Ntot-1))
+	end
+	
+	return nullerror
+end	
+###############################
+# END: Miscellaneous Functions
+###############################
 
 
 
+
+###############################
+# Functions for plots
+###############################
+function sortblock(block,blockprev)
+    Bnow = maximum(block)
+    Bprev = maximum(blockprev)
+    if Bprev > 1
+        blbl = hcat(block,blockprev)
+        M = zeros(Int64,Bnow,Bprev)
+        for i = 1:size(block,1)
+            M[blbl[i,1],blbl[i,2]] += 1
+        end
+        (val,ind) = findmax(M,2)
+        maxind = ind2sub((Bnow,Bprev),vec(ind))[2]
+        varM = var(M,2)
+        c = collect(1:Bnow)
+        MM = sortrows(hcat(maxind,varM,c), by=x->(x[1],-x[2]))
+        relabel = zeros(Bnow,1)
+        for k = 1:Bnow
+            relabel[Int64(MM[k,end])] = k
+        end
+        for i = 1:size(block,1)
+            block[i] = relabel[block[i]]
+        end
+    end
+    
+    return block
+end
+
+# Alluvial diagram: smap file generator //////////////////////////////
+function AlluvialDiagram(B,block,maxPSIval)
+    significant = 0.7
+    Ntot = size(maxPSIval,1)
+    stralluvial = "partition$(B).smap"
+    fpalluvial = open(stralluvial,"w")
+    
+    modules = zeros(Int64,Ntot,3) # [node num., block label, significance]
+    modules[:,1] = collect(1:Ntot)
+    modules[:,2] = block
+    modules = sortrows(modules, by=x->x[2])
+    
+    trueB = 0
+    labelprev = 0
+    moduleindices = AbstractString[]
+    for k = 1:Ntot
+        if modules[k,2] != labelprev
+            trueB += 1
+            labelprev = modules[k,2] # modules[k,2] may not be successive, e.g. 1 1 3 3 4 4 ...
+            push!(moduleindices, "$(modules[k,1]),...")
+        end
+        modules[k,2] = trueB
+        maxPSIval[modules[k,1]]>significant ? modules[k,3] = 1 : continue        
+    end
+
+    write(fpalluvial, "*Undirected\n")
+    write(fpalluvial, "*Modules $(trueB)\n")
+    for md = 1:trueB
+        write(fpalluvial, """$(md) "$(moduleindices[md])" $(Float16(0.1/trueB)) $(Float16(0.01/trueB))\n""")
+    end
+    write(fpalluvial, "*Insignificants 0\n")
+    write(fpalluvial, "*Nodes $(Ntot)\n")
+    sublabel = 0
+    labelprev = 0
+    for k = 1:Ntot
+        modules[k,2] == labelprev ? sublabel += 1 : sublabel = 1
+        labelprev = modules[k,2]
+        if modules[k,3] == 1
+            write(fpalluvial, """$(modules[k,2]):$(sublabel) "Node $(modules[k,1])" $(Float16(0.1/Ntot))\n""")
+        else
+            write(fpalluvial, """$(modules[k,2]);$(sublabel) "Node $(modules[k,1])" $(Float16(0.1/Ntot))\n""")
+        end
+    end
+    write(fpalluvial, "*Links $(trueB^2)\n")
+    for s = 1:trueB
+    for t = 1:trueB
+            write(fpalluvial, "$(s) $(t) $(Float16(0.1/trueB^2))\n")
+    end
+    end
+    
+    close(fpalluvial)
+end
 
 
 function PlotAssessments(x,y0,y1,y1error,y2,y2error,y3,y3error,y4,y4error,dataset)
     Bmin = minimum(x)
     Bmax = maximum(x)
     
-    fig = figure("plot_$(dataset)",figsize=(4,6))
-#    subplots_adjust(hspace=0.5,wspace=0.3)
-    subplots_adjust(hspace=0.1) # Set the vertical spacing between axes
+    fig = figure("plot_$(dataset)",figsize=(9,3))
+    subplots_adjust(hspace=0.5,wspace=0.3)
+#    subplots_adjust(hspace=0.1) # Set the vertical spacing between axes
+	font1 = Dict("color"=>"k","size"=>14)
 
     # 1st fig --------
-    subplot(211)
+    subplot(121)
     p = plot(x,y0,color="0.4",linestyle="-",marker="8",markeredgecolor="None",markersize=8,label="Bethe free energy")
     ax = gca()
-	setp(ax[:get_xticklabels](),visible=false) # Disable x tick labels
-    font1 = Dict("color"=>"k")
     ylabel("Bethe free energy",fontdict=font1)
     setp(ax[:get_yticklabels](),color="0.2") # Y Axis font formatting
-#    xlabel(L"Number of clusters $\, \mathit{q}$",fontdict=font1)
+    xlabel(L"Number of clusters $\, \mathit{q}$",fontdict=font1)
     ax[:set_xlim](Bmin-0.2,Bmax+0.2)
     Mx = matplotlib[:ticker][:MultipleLocator](1) # Define interval
     ax[:xaxis][:set_major_locator](Mx) # Set interval 
 
     # 2nd fig --------
-    subplot(212)
+    subplot(122)
     p = plot(x,y2,color="#27AE60",linestyle="-",linewidth=2,marker="^",markersize=8,markerfacecolor="white",markeredgecolor="#27AE60",markeredgewidth=1.5,zorder=10,label="EGP")
     p = fill_between(x,vec(y2-y2error),vec(y2+y2error),color="#2ECC71",alpha=0.7,edgecolor="None",zorder=9)
     p = plot(x,y1,color="#C0392B",linestyle="-",linewidth=2,marker="o",markersize=7,markerfacecolor="white",markeredgecolor="#C0392B",markeredgewidth=1.5,zorder=8,label="EBayes")
@@ -454,7 +581,6 @@ function PlotAssessments(x,y0,y1,y1error,y2,y2error,y3,y3error,y4,y4error,datase
     p = plot(x,y4,color="#F39C12",linestyle="-",linewidth=2,marker="s",markersize=7,markerfacecolor="white",markeredgecolor="#F39C12",markeredgewidth=1.5,zorder=4,label="EMAP")
     p = fill_between(x,vec(y4-y4error),vec(y4+y4error),color="#F1C40F",alpha=0.7,edgecolor="None",zorder=3)
     ax = gca()
-    font1 = Dict("color"=>"k")
     ylabel("Prediction/training error",fontdict=font1)
     setp(ax[:get_yticklabels](),color="k") # Y Axis font formatting
     ax[:set_xlim](Bmin-0.2,Bmax+0.2)
@@ -509,8 +635,9 @@ function PlotAffinityMatrix(Bsize,grDict,CrsDict,dataset)
 #    fig[:canvas][:draw]() # Update the figure
     savefig("structures_$(dataset).pdf",bbox_inches="tight",pad_inches=0.1)
 end
-
-
+###############################
+# END: Functions for plots
+###############################
 
 
 
@@ -520,7 +647,7 @@ end
 doc = """
 
 Usage:
-  sbm.jl <filename> [--dataset=<dataset>] [--dc=<dc>] [--q=Blist] [--init=partition...] [--initnum=<samples>] [--itrmax=<itrmax>] [--learning_rate=<learningrate>] [--prior=priorlearning]
+  sbm.jl <filename> [--dataset=<dataset>] [--dc=<dc>] [--q=Blist] [--init=partition...] [--initnum=<samples>] [--itrmax=<itrmax>] [--learningrate=<learningrate>] [--prior=priorlearning] [--alluvial=alluvial]
   sbm.jl -h | --help
   sbm.jl --version
   
@@ -533,9 +660,10 @@ Options:
   --init=partition...       		Initial partition. [default: normalizedLaplacian]
   --initnum=<samples>       		Number of initial states. [default: 10]
   --dc=<dc>                 		Degree correction. [default: true]
+  --learningrate=<learningrate>     Learning rate. [default: 0.3]
   --itrmax=<itrmax>       			Maximum number of BP iteration. [default: 128]
   --prior=priorlearning     		Learn cluster sizes. [default: true]
-  --learning_rate=<learningrate>	Learning rate. [default: 1]
+  --alluvial=alluvial           	Generate smap files for the Alluvial diagram. [default: false]
 
 ========================
 Bayesian inference for the stochastic block model using EM algorithm + belief propagation with the leave-one-out cross-validation.
@@ -544,12 +672,13 @@ Bayesian inference for the stochastic block model using EM algorithm + belief pr
 + Convergence criterion = 10^(-6) by default.
 + Note that the result varies depending on the initial values of the hyperparameters (cluster size & affinity matrix). 
 To be cautious, try multiple `--init` and large `initnum`. 
-To select the initial values of the hyperparameters, specify `--init`. 
+To select the initial values of the model parameters, specify `--init`. 
 The options for `--init` are 
 	- normalizedLaplacian: Spectral clustering with the normalized Laplacian + k-means algorithm. 
 	- random: Equal size clusters & randomly polarized affinity matrix. 
-	- uniformAssortative: Equal size clusters & equal size assortative block structure. 
-	- uniformDisassortative: Equal size clusters & equal size disassortative block structure. 
+	- uniformAssortative: Equal size clusters & equal strength assortative block structure. 
+	- uniformDisassortative: Equal size clusters & equal strength disassortative block structure. 
+	- Bipartite: Equal size clusters & equal strength bipartite structure. 
 
 Examples: 
 Inference of `edgelist.txt` for the standard SBM with q = 2 to 6:
@@ -561,13 +690,13 @@ or
 julia sbm.jl edgelist.txt --dc=true --q=2:2:6 --init={normalizedLaplacian,random} --initnum=5
 ========================
 Author: Tatsuro Kawamoto: kawamoto.tatsuro@gmail.com
-Reference: arXiv:1605.07915 (2016).
+Reference: Tatsuro Kawamoto and Yoshiyuki Kabashima, 'Cross-validation estimate of the number of clusters in a network', Scientific Reports, 7, 3327 (2017).
 
 """
 
 using DocOpt  # import docopt function
 
-args = docopt(doc, version=v"0.2.6") #0.2.6.3
+args = docopt(doc, version=v"0.2.6-8")
 strdataset = args["<filename>"]
 dataset = args["--dataset"]
 Blist = args["--q"]
@@ -576,9 +705,11 @@ samples = parse(Int64,args["--initnum"])
 degreecorrection = args["--dc"]
 degreecorrection == "true" ? degreecorrection = true : degreecorrection = false
 itrmax = parse(Int64,args["--itrmax"])
-learningrate = parse(Float32,args["--learning_rate"])
+learningrate = parse(Float32,args["--learningrate"])
 priorlearning = args["--prior"]
 priorlearning == "true" ? priorlearning = true : priorlearning = false
+alluvial = args["--alluvial"]
+alluvial == "true" ? alluvial = true : alluvial = false
 
 Blistarray = split(Blist,":")
 if length(Blistarray) == 2
@@ -598,13 +729,12 @@ end
 
 
 
-
 #strdataset = "polbooks_newman.txt"
-#dataset = "political books"
+#dataset = "politicalbooks"
 Ltotinput = countlines(open( strdataset, "r" ))
 fpmeta = open("summary.txt","w")
 write(fpmeta, "dataset: $(strdataset)\n")
-@time open( strdataset, "r" ) do fp
+open( strdataset, "r" ) do fp
     cnt = 0
     Ntotinput = 0
     links = zeros(Int64,Ltotinput,2)
@@ -626,12 +756,14 @@ write(fpmeta, "dataset: $(strdataset)\n")
     Nthreshold = round(Ntotinput/2)
 #    Barray = [2:8;]
     Bsize = length(Barray)
+#    initialconditions = ["normalizedLaplacian","random","uniformAssortative","uniformDisassortative","Bipartite"]
 #    samples = 10
 #    degreecorrection = false
-#    initialconditions = ["normalizedLaplacian","random","uniformAssortative","uniformDisassortative"]
 #    learningrate = 0.3
-#    itrmax = 1024
+#    itrmax = 512
 #    priorlearning = true
+    spectral = true
+    alluvial = false
     write(fpmeta, "initial conditions: $(join(initialconditions, ", "))\n")
     write(fpmeta, "numbmer of samples for each initial condition: $(samples)\n")
     write(fpmeta, "degree correction: $(degreecorrection)\n")
@@ -648,11 +780,36 @@ write(fpmeta, "dataset: $(strdataset)\n")
         println("This is not a giant component... try again.")
     end
     Ltot = Int64(0.5*size(links,1))
+    blockprev = zeros(Ntot,1)
     assignment = zeros(Int64,Ntot,Bsize+1) # 1st column is the node label, but B starts from 2
     assignment[:,1] = collect(1:Ntot)
     write(fpmeta, "numbmer of vertices (giant component): $(Ntot)\n")
     write(fpmeta, "numbmer of edges (giant component): $(Ltot)\n")
 
+	nullerror = UniformGraphError(links,Ntot,degreecorrection)
+	if degreecorrection == true
+    	write(fpmeta, "Error for q=1 (degree-corrected): $(nullerror)\n")
+	else
+    	write(fpmeta, "Error for q=1 (degree-uncorrected): $(nullerror)\n")
+	end
+    
+    if spectral == true
+        degrees = degreesequence(links,Ntot)
+        Bmax = maximum(Barray)
+        (NBlambdas,~) = nonbacktracking(links,degrees,Ntot,Bmax)
+        spectralradius = sqrt(real(NBlambdas[1]))
+        BwithNBT = countnz(real(NBlambdas).>spectralradius)
+    else
+        spectralradius = "-"
+        BwithNBT = 0
+    end
+    if BwithNBT == Bmax
+        BwithNBT = 0
+    end
+    println("BwithNBT = $(BwithNBT)")
+    write(fpmeta, "spectral radius of the non-backtracking matrix = $(spectralradius)\n")
+    BwithNBT == 0 ? write(fpmeta, "non-backtracking matrix: q* = -\n") : write(fpmeta, "non-backtracking matrix: q* = $(BwithNBT)\n")
+    
     fpAssessment = open("assessment.txt","w")
     fpPartition = open("assignment.txt","w")
     
@@ -735,7 +892,7 @@ write(fpmeta, "dataset: $(strdataset)\n")
                 end
             end
         end # initial conditions
-
+        
         # standard errors of CVs
         SECVBayes = sqrt(varCVBayess[findmin(CVBayess)[2]]/Ltot)
         SECVGP = sqrt(varCVGPs[findmin(CVGPs)[2]]/Ltot)
@@ -754,11 +911,17 @@ write(fpmeta, "dataset: $(strdataset)\n")
         grDict[bb] = gropt
         CrsDict[bb] = Crsopt
 
-        (val, ind) = findmax(PSIopt,2)
+        (maxPSIval, ind) = findmax(PSIopt,2)
         block = ind2sub((Ntot,B),vec(ind))[2]
         assignment[:,bb+1] = block # 1st column is the node label, but B starts from 2
         actualB = length(unique(vec(block)))
         write(fpmeta, "q = $(B): actual q = $(actualB), number of iteration = $(itrnumopt)\n")
+        
+        block = sortblock(block,blockprev)
+        blockprev = block[:]
+        if alluvial == true
+            AlluvialDiagram(B,block,maxPSIval)
+        end
     end # B-loop
     
     # OUTPUT RESULTS :::::::::::::::::::::::::::::::::::::::::::::::::
