@@ -1,12 +1,9 @@
 using PyPlot
 
-function EM(gr,Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnoise,learning,priorlearning,dc)
+function EM(gr,Ntot,B,links,maxomega,itrmax,betafrac,learning,priorlearning,dc,learningrate)
 
     function logsumexp(array)
         array = vec(sortcols(array))
-        for j = 1:length(array)
-            array[end] - array[1] > log(10^(16.0)) ? shift!(array) : break # this cutoff must be smaller than cutoff in normalize_logprob: e.g. all elements are below cutoff.
-        end
         if maximum(array) - minimum(array) > 700
             println("overflow or underflow is UNAVOIDABLE: restrict omega to smaller values.")
         end
@@ -69,7 +66,8 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnois
             prev = PSI[i,:]/Ntot
             logPSIi = logunnormalizedMessage(i) # new PSI with new PSIcav
             PSI[i,:] = normalize_logprob(logPSIi)
-            h += degrees[i]*PSI[i,:] - hprev
+#            h += degrees[i]*PSI[i,:] - hprev  # julia-v0.4.5
+            h += (degrees[i]*PSI[i,:] - hprev)'  # julia-v0.5.0
             conv += sum(abs(PSI[i,:]/Ntot - prev))
         end
         return (conv, PSI)
@@ -181,15 +179,6 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnois
         push!(nb,Int64[row[i] for i in nzrange(A,j)])
     end
     # ----------------------------------
-    #=
-    # high degree cutoff
-    cutoff = 10
-    for i = 1:Ntot
-        if length(nb[i]) > cutoff
-            nb[i] = nb[i][1:cutoff]
-        end
-    end
-    =#
     ###############
     degrees = sum(A,2)
     excm = (degrees'*degrees)[1]/(Ntot*mean(degrees)) - 1# average excess degree
@@ -207,7 +196,8 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnois
     
     PSIcav = Dict()
     for ind in inds
-        PSIcav[ind] = abs( ones(1,B) + initialnoise*(0.5*ones(1,B) - rand(1,B)) ) # noise strength is an important factor.
+        PSIcav[ind] = rand(1,B)
+#        PSIcav[ind] = abs( ones(1,B) + initialnoise*(0.5*ones(1,B) - rand(1,B)) ) # noise strength is an important factor.
         PSIcav[ind] = PSIcav[ind]/sum(PSIcav[ind])
     end
     h = zeros(1,B)
@@ -224,15 +214,16 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnois
     varCVMAP = 0
 ################
     
-    #itrmax = 128
-    #BPconvthreshold = 0.00001
+    BPconvthreshold = 0.000001
     for itr = 1:itrmax
         (BPconv, PSI) = BP()
         if priorlearning == true
             gr = update_gr(PSI)
         end        
         if learning == true
-            (omegain, omegaout) = update_omega()
+            (omegainNew, omegaoutNew) = update_omega()
+            omegain = learningrate*omegainNew + (1-learningrate)*omegain
+            omegaout = learningrate*omegaoutNew + (1-learningrate)*omegaout
             (alpha, beta) = update_alphabeta()
         end
         if BPconv < BPconvthreshold
@@ -325,6 +316,23 @@ function LinksConnected(links,Ntotinput,cc)
     
     return (Ntot,links)
 end
+
+function UniformGraphError(links,Ntot,degreecorrection)
+    Ktot = size(links,1)
+    A = sparse(links[:,1],links[:,2],ones(Ktot),Ntot,Ntot)
+    degrees = sum(A,2)
+	if degreecorrection == true
+		nullerror = 0
+		for di in degrees
+			nullerror += di*log(di)
+		end
+		nullerror = 1 + log(Ktot) - 2*nullerror/Ktot 
+	else
+		nullerror = 1 - log(Ktot/(Ntot*Ntot-1))
+	end
+	
+	return nullerror
+end	
 ######################################
 
 
@@ -524,14 +532,14 @@ function PlotResults(x,w1,w2,y1,y1error,y2,y2error,y3,y3error,y4,y4error,z1,z2,z
 
     # 2nd fig --------
     subplot(312)
-    p = plot(x,y2,color="darksage",linestyle="-",marker="^",markersize=6,markerfacecolor="white",markeredgecolor="darksage",markeredgewidth=2,zorder=10,label="EGP")
-    p = fill_between(x,vec(y2-y2error),vec(y2+y2error),color="lawngreen",alpha=0.2,edgecolor="None",zorder=9)
-    p = plot(x,y1,color="firebrick",linestyle="-",marker="o",markersize=6,markerfacecolor="white",markeredgecolor="firebrick",markeredgewidth=2,zorder=8,label="EBayes")
-    p = fill_between(x,vec(y1-y1error),vec(y1+y1error),color="red",alpha=0.2,edgecolor="None",zorder=7)
-    p = plot(x,y3,color="deepskyblue",linestyle="-",marker="D",markersize=6,markerfacecolor="white",markeredgecolor="deepskyblue",markeredgewidth=2,zorder=6,label="EGT")
-    p = fill_between(x,vec(y3-y3error),vec(y3+y3error),color="deepskyblue",alpha=0.2,edgecolor="None",zorder=5)
-    p = plot(x,y4,color="goldenrod",linestyle="-",marker="s",markersize=6,markerfacecolor="white",markeredgecolor="goldenrod",markeredgewidth=2,zorder=4,label="EMAP")
-    p = fill_between(x,vec(y4-y4error),vec(y4+y4error),color="goldenrod",alpha=0.2,edgecolor="None",zorder=3)
+    p = plot(x,y2,color="#27AE60",linestyle="-",marker="^",markersize=6,markerfacecolor="white",markeredgecolor="#27AE60",markeredgewidth=2,zorder=10,label="EGP")
+    p = fill_between(x,vec(y2-y2error),vec(y2+y2error),color="#2ECC71",alpha=0.7,edgecolor="None",zorder=9)
+    p = plot(x,y1,color="#C0392B",linestyle="-",marker="o",markersize=6,markerfacecolor="white",markeredgecolor="#C0392B",markeredgewidth=2,zorder=8,label="EBayes")
+    p = fill_between(x,vec(y1-y1error),vec(y1+y1error),color="#E74C3C",alpha=0.7,edgecolor="None",zorder=7)
+    p = plot(x,y3,color="#2980B9",linestyle="-",marker="D",markersize=6,markerfacecolor="white",markeredgecolor="#2980B9",markeredgewidth=2,zorder=6,label="EGT")
+    p = fill_between(x,vec(y3-y3error),vec(y3+y3error),color="#3498DB",alpha=0.7,edgecolor="None",zorder=5)
+    p = plot(x,y4,color="#F39C12",linestyle="-",marker="s",markersize=6,markerfacecolor="white",markeredgecolor="#F39C12",markeredgewidth=2,zorder=4,label="EMAP")
+    p = fill_between(x,vec(y4-y4error),vec(y4+y4error),color="#F1C40F",alpha=0.7,edgecolor="None",zorder=3)
     p = axvline(x=BwithNBT,linestyle="--",color="rosybrown",zorder=2)
     ax = gca()
     setp(ax[:get_xticklabels](),visible=false) # Disable x tick labels
@@ -578,8 +586,8 @@ function PlotResults(x,w1,w2,y1,y1error,y2,y2error,y3,y3error,y4,y4error,z1,z2,z
 
     ax[:set_xlim](Bmin-0.2,Bmax+0.2)
 #    fig[:canvas][:draw]() # Update the figure
-    suptitle(dataset,fontdict=fontLarge)
-    savefig("plot_$(dataset).pdf",bbox_inches="tight",pad_inches=0.1)
+#    suptitle(dataset,fontdict=fontLarge)
+    savefig("assessment_$(dataset).pdf",bbox_inches="tight",pad_inches=0.1)
     
 end
 
@@ -597,7 +605,7 @@ end
 doc = """
 
 Usage:
-  mod.jl <filename> [--q=Blist] [--dc=dc] [--learning=learning] [--prior=priorlearning] [--alluvial=alluvial] [--initnum=<samples>] [--itrmax=<itrmax>] [--conv=<BPconvthreshold>] [--noise=<initialnoise>]
+  mod.jl <filename> [--dataset=<dataset>] [--q=Blist] [--dc=<dc>] [--learning=learning] [--prior=priorlearning] [--initnum=<samples>] [--itrmax=<itrmax>] [--learningrate=<learningrate>] [--alluvial=alluvial]
   mod.jl -h | --help
   mod.jl --version
   
@@ -605,15 +613,15 @@ Usage:
 Options:
   -h --help                 	Show this screen.
   --version                 	Show version.
+  --dataset						Name of the dataset [default: ""]
   --q=Blist                 	List of number of clusters. [default: 2:6]
-  --dc=dc           			Fit the degree-corrected SBM. [default: true]  
+  --dc=<dc>           			Fit the degree-corrected SBM. [default: true]  
   --learning=learning           Learn affinity matrix. [default: true]
   --prior=priorlearning         Learn cluster sizes. [default: false]
+  --initnum=<samples>       	Number of initial states. [default: 10]
+  --itrmax=<itrmax>         	Maximum number of iterations in BP. [default: 256]
+  --learningrate=<learningrate>         	Learning rate. [default: 0.3]
   --alluvial=alluvial           Generate smap files for the Alluvial diagram. [default: false]
-  --initnum=<samples>       	Number of initial states. [default: 3]
-  --itrmax=<itrmax>         	Maximum number of iterations in BP. [default: 128]
-  --conv=<BPconvthreshold>      Convergence criterion of BP. [default: 0.00001]
-  --noise=<initialnoise>        Noise strength in initial cavity bias psi^{i->j}. [default: 0.1]  
 
 ========================
 Bayesian inference for the degree-corrected stochastic block model with a restricted affinity matrix 
@@ -632,8 +640,9 @@ Reference: Tatsuro Kawamoto and Yoshiyuki Kabashima, arXiv:1606.07668 (2016).
 
 using DocOpt  # import docopt function
 
-args = docopt(doc, version=v"0.1.3")
+args = docopt(doc, version=v"0.1.5")
 strdataset = args["<filename>"]
+dataset = args["--dataset"]
 Blist = args["--q"]
 dc = args["--dc"]
 dc == "true" ? dc = true : dc = false
@@ -645,8 +654,7 @@ alluvial = args["--alluvial"]
 alluvial == "true" ? alluvial = true : alluvial = false
 samples = parse(Int64,args["--initnum"])
 itrmax = parse(Int64,args["--itrmax"])
-BPconvthreshold = parse(Float64,args["--conv"])
-initialnoise = parse(Float64,args["--noise"])
+learningrate = parse(Float32,args["--learningrate"])
 
 Blistarray = split(Blist,":")
 if length(Blistarray) == 2
@@ -671,11 +679,8 @@ end
 
 
 
-
-
-
-dataset = "model_assessment" # plot title
-#strdataset = "connected-edgelist-polbooks.txt"
+#dataset = "SBM"
+#strdataset = "edgelist.txt"
 Ltotinput = countlines(open( strdataset, "r" ))
 fpmeta = open("summary.txt","w")
 write(fpmeta, "dataset: $(strdataset)\n\n")
@@ -701,21 +706,20 @@ open( strdataset, "r" ) do fp
 
     Nthreshold = round(Ntotinput/2)
     IPRthreshold = 10/Ntotinput
-#	dc = true # degree-correction
-#	priorlearning = false
     plots = true
+#    dc = false # degree-correction
+#    learningrate = 0.3
+#    priorlearning = true
 #    learning = true
     spectral = true
 #    alluvial = false
-#    Barray = [2:1:5;]
+#    Barray = [2:1:4;]
     Bsize = length(Barray)
     Bmax = maximum(Barray)
     Bmin = minimum(Barray)
-#    initialnoise = 0.1
-#    itrmax = 64
-#    BPconvthreshold = 0.000001
-#    samples = 1
-    
+#    itrmax = 512
+#    samples = 10
+
     A = sparse(links[:,1],links[:,2],ones(size(links,1)),Ntotinput,Ntotinput)
     nb = Array[]
     row = rowvals(A)
@@ -744,20 +748,25 @@ open( strdataset, "r" ) do fp
     CVGPopt = 1000000
     write(fpmeta, "numbmer of vertices (giant component): $(Ntot)\n")
     write(fpmeta, "numbmer of edges (giant component): $(Ltot)\n\n")
-    write(fpmeta, "Hyperparameter learning = $(learning)\n")
-    write(fpmeta, "Noise strength of initial cavity biases = $(initialnoise)\n")
+    write(fpmeta, "Degree correction = $(dc)\n")
+    write(fpmeta, "learning rate = $(learningrate)\n")
+    write(fpmeta, "prior learning = $(priorlearning)\n")
+    write(fpmeta, "model parameter learning = $(learning)\n")
     write(fpmeta, "Max number of iteration = $(itrmax)\n")
-    write(fpmeta, "BP convergence threshold = $(BPconvthreshold)\n")
     write(fpmeta, "Number of initial states = $(samples)\n\n")
+    
+    nullerror = UniformGraphError(links,Ntot,dc)
+    if dc == true
+        write(fpmeta, "Error for q=1 (degree-corrected): $(nullerror)\n\n")
+    else
+        write(fpmeta, "Error for q=1 (degree-uncorrected): $(nullerror)\n\n")
+    end
 
     strAssessment = "assessment.txt"
-#    strNBspectra = "spectraNonBacktracking.txt"
-    
     strPartition = "assignment.txt"
     
     fpAssessment = open(strAssessment,"w")
     fpPartition = open(strPartition,"w")
-#    fpNBspectra = open(strNBspectra,"w")
     
     retQvec = zeros(Bsize)
     MDLvec = zeros(Bsize)
@@ -788,9 +797,9 @@ open( strdataset, "r" ) do fp
         PSIopt = zeros(Ntot,B)
         omegaopt = zeros(2)
         alphabetaopt = zeros(2)
+        
+        gr = ones(1,B)/B # prior distribution    
                 
-        gr = ones(1,B)/B # prior distribution
-		
         ## upper bound of omega ===================
         maxomega = 1
         ##=================================
@@ -798,7 +807,9 @@ open( strdataset, "r" ) do fp
         sm = 0
         overflow = 0
         while sm < samples
-            (excm,alpha,beta,omegain,omegaout,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,cnv,itrnum) = EM(gr,Ntot,B,links,maxomega,itrmax,BPconvthreshold,betafrac,initialnoise,learning,priorlearning,dc)
+            tic()
+            (excm,alpha,beta,omegain,omegaout,PSI,FE,CVBayes,CVGP,CVGT,CVMAP,varCVBayes,varCVGP,varCVGT,varCVMAP,cnv,itrnum) = EM(gr,Ntot,B,links,maxomega,itrmax,betafrac,learning,priorlearning,dc,learningrate)
+            toc()
             if cnv == false
                 betafrac += 0.1
                 if betafrac <= 1
@@ -894,11 +905,6 @@ open( strdataset, "r" ) do fp
         (NBlambdas,~) = nonbacktracking(links,degrees,Ntot,Bmax)
         spectralradius = sqrt(real(NBlambdas[1]))
         BwithNBT = countnz(real(NBlambdas).>spectralradius)
-        #=
-        for k = 1:size(NBlambdas,1)
-            write(fpNBspectra, "$(NBlambdas[k])\n")
-        end
-        =#
     else
         spectralradius = "-"
         BwithNBT = 0
@@ -1001,24 +1007,6 @@ open( strdataset, "r" ) do fp
 
     close(fpAssessment)
     close(fpPartition)
-#    close(fpNBspectra)
 
 end # open
 close(fpmeta)
-
-#inputs: 
-#    dataset = "karate club"
-#    strdataset = "karateclub.txt"
-#    learning = true
-#    Barray = [2:6;]
-#    samples = 10
-#
-#options: 
-#    itrmax = 64
-#    BPconv = 10^-6
-#    initialnoise = 0.1
-#    plots = true
-#    alluvial = true
-#    spectral = true
-
-# Elapsed time can be measured by @time or tic()&toc(). You receive a Tkinter error, but it is a known error of Tkinter and there is no problem.
