@@ -4,18 +4,19 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,betafrac,learning,priorlearning,dc,l
 
     function logsumexp(array)
         array = vec(sortcols(array))
-        if maximum(array) - minimum(array) > 700
-            println("overflow or underflow is UNAVOIDABLE: restrict omega to smaller values.")
+        maxval = maximum(array)
+        for k = 1:length(array)
+            maxval - array[k] > 500 ? array[k] = maxval - 500 : continue
         end
-        array[1] + log(sum(exp(array - vec(ones(1,length(array)))*array[1])))
+        array[1] + log.(sum(exp.(array - vec(ones(1,length(array)))*array[1])))
     end
 
     function normalize_logprob(array)
         arraylength = length(array)
         for r = 1:arraylength
-            array[r] < log(10^(-8.0)) ? array[r] = log(10^(-8.0)) : continue
+            array[r] < log.(10^(-8.0)) ? array[r] = log.(10^(-8.0)) : continue
         end
-        exp(array -logsumexp(array)*ones(1,arraylength))
+        exp.(array -logsumexp(array)*ones(1,arraylength))
     end
 
     function update_h()
@@ -38,13 +39,13 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,betafrac,learning,priorlearning,dc,l
         logmessages = 0
         for s in nb[i]
             indsi = sub2ind((Ntot,Ntot),s,i)
-            logmessages += log(ones(1,B) + PSIcav[indsi]*(exp(beta)-1))
+            logmessages += log.(ones(1,B) + PSIcav[indsi]*(exp.(beta)-1))
         end
 
         if dc == false
-            logmessages = logmessages - alpha*beta*h + log(gr)
+            logmessages = logmessages - alpha*beta*h + log.(gr)
         else
-            logmessages = logmessages - alpha*beta*length(nb[i])*h + log(gr)
+            logmessages = logmessages - alpha*beta*length(nb[i])*h + log.(gr)
         end        
         
         return logmessages
@@ -58,7 +59,7 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,betafrac,learning,priorlearning,dc,l
             for j in nb[i]
                 indij = sub2ind((Ntot,Ntot),i,j)
                 indji = sub2ind((Ntot,Ntot),j,i)
-                PSIcav[indij] = logPSIi - log(ones(1,B) + PSIcav[indji]*(exp(beta)-1))
+                PSIcav[indij] = logPSIi - log.(ones(1,B) + PSIcav[indji]*(exp.(beta)-1))
                 PSIcav[indij] = normalize_logprob(PSIcav[indij])
             end
 
@@ -66,9 +67,9 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,betafrac,learning,priorlearning,dc,l
             prev = PSI[i,:]/Ntot
             logPSIi = logunnormalizedMessage(i) # new PSI with new PSIcav
             PSI[i,:] = normalize_logprob(logPSIi)
-#            h += degrees[i]*PSI[i,:] - hprev  # julia-v0.4.5
-            h += (degrees[i]*PSI[i,:] - hprev)'  # julia-v0.5.0
-            conv += sum(abs(PSI[i,:]/Ntot - prev))
+#            h += degrees[i]*PSI[i,:] - hprev  # julia ver 0.4.5
+            h += (degrees[i]*PSI[i,:] - hprev)'  # julia ver 0.5.0
+            conv += sum(abs.(PSI[i,:]/Ntot - prev))
         end
         return (conv, PSI)
     end
@@ -105,7 +106,7 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,betafrac,learning,priorlearning,dc,l
     end
     
     function update_alphabeta()
-        beta = log(omegain/omegaout)
+        beta = log.(omegain/omegaout)
         alpha = (omegain - omegaout)/beta
         return (alpha, beta)
     end
@@ -132,31 +133,31 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,betafrac,learning,priorlearning,dc,l
             end
             cnt += 1
             sumPSIPSI = (PSIcav[indij]*PSIcav[indji]')[1] # \sum_sigma PSI^{i\to j}_sigma*PSI^{j\to i}_sigma
-            logZijs[cnt] = log(1 + (exp(beta)-1)*sumPSIPSI)
+            logZijs[cnt] = log.(1 + (exp.(beta)-1)*sumPSIPSI)
             
             # Bayes prediction error: 
-            CVBPs[cnt] = logZijs[cnt] + log(degrees[i]) + log(omegaout) + log(degrees[j])
+            CVBPs[cnt] = logZijs[cnt] + log.(degrees[i]) + log.(omegaout) + log.(degrees[j])
             # Gibbs prediction error: 
             CVGPs[cnt] = beta*sumPSIPSI
             # Gibbs training error: 
-            CVGTs[cnt] = degrees[i]*degrees[j]*(omegaout*log(omegaout) + (omegain*log(omegain) - omegaout*log(omegaout))*sumPSIPSI)/exp(CVBPs[cnt])
+            CVGTs[cnt] = degrees[i]*degrees[j]*(omegaout*log.(omegaout) + (omegain*log.(omegain) - omegaout*log.(omegaout))*sumPSIPSI)/exp.(CVBPs[cnt])
             # MAP estimate of the Gibbs prediction error: 
             (MAPij, s) = findmax(PSIcav[indij])
             (MAPji, t) = findmax(PSIcav[indji])
             if s == t
-                CVMAPs[cnt] = log(omegain)
+                CVMAPs[cnt] = log.(omegain)
             else
-                CVMAPs[cnt] = log(omegaout)
+                CVMAPs[cnt] = log.(omegaout)
             end
             #################
         end
         
-        constshift = sum([degrees[i]*log(degrees[i]) for i in 1:size(degrees,1)])/Ltot
+        constshift = sum([degrees[i]*log.(degrees[i]) for i in 1:size(degrees,1)])/Ltot
         
         #FEmodbp = -(sumlogZi - sum(logZijs) + 0.5*alpha*beta*norm(update_h())^2 )/(beta*Ntot)
-        FE = -(sumlogZi - sum(logZijs) + 0.5*alpha*beta*norm(update_h())^2 )/(beta*Ntot) - (Ltot/Ntot)*(2*Ltot*omegaout+log(omegaout)+constshift)/beta
+        FE = -(sumlogZi - sum(logZijs) + 0.5*alpha*beta*norm(update_h())^2 )/(beta*Ntot) - (Ltot/Ntot)*(2*Ltot*omegaout+log.(omegaout)+constshift)/beta
         CVBayes = -sum(CVBPs)/Ltot + 1
-        CVGP = -sum(CVGPs)/Ltot - log(omegaout) + 1 - constshift
+        CVGP = -sum(CVGPs)/Ltot - log.(omegaout) + 1 - constshift
         CVGT = -sum(CVGTs)/Ltot + 1 - constshift
         CVMAP = -sum(CVMAPs)/Ltot + 1 - constshift
         varCVBayes = var(logZijs)
@@ -182,8 +183,8 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,betafrac,learning,priorlearning,dc,l
     ###############
     degrees = sum(A,2)
     excm = (degrees'*degrees)[1]/(Ntot*mean(degrees)) - 1# average excess degree
-    beta0 = log(1 + B/(excm-1))
-    betaast = log(1 + B/(sqrt(excm)-1))
+    beta0 = log.(1 + B/(excm-1))
+    betaast = log.(1 + B/(sqrt(excm)-1))
     
     if dc == false
         degrees = ones(Ntot,1) #### Remove degree-correction #######
@@ -191,13 +192,13 @@ function EM(gr,Ntot,B,links,maxomega,itrmax,betafrac,learning,priorlearning,dc,l
 
     alpha = 1/Ktot
     beta = betaast - betafrac*(betaast - beta0)
-    omegain = exp(beta)*alpha*beta/(exp(beta)-1)
-    omegaout = alpha*beta/(exp(beta)-1)
+    omegain = exp.(beta)*alpha*beta/(exp.(beta)-1)
+    omegaout = alpha*beta/(exp.(beta)-1)
     
     PSIcav = Dict()
     for ind in inds
         PSIcav[ind] = rand(1,B)
-#        PSIcav[ind] = abs( ones(1,B) + initialnoise*(0.5*ones(1,B) - rand(1,B)) ) # noise strength is an important factor.
+#        PSIcav[ind] = abs.( ones(1,B) + initialnoise*(0.5*ones(1,B) - rand(1,B)) ) # noise strength is an important factor.
         PSIcav[ind] = PSIcav[ind]/sum(PSIcav[ind])
     end
     h = zeros(1,B)
@@ -321,18 +322,18 @@ function UniformGraphError(links,Ntot,degreecorrection)
     Ktot = size(links,1)
     A = sparse(links[:,1],links[:,2],ones(Ktot),Ntot,Ntot)
     degrees = sum(A,2)
-	if degreecorrection == true
-		nullerror = 0
-		for di in degrees
-			nullerror += di*log(di)
-		end
-		nullerror = 1 + log(Ktot) - 2*nullerror/Ktot 
-	else
-		nullerror = 1 - log(Ktot/(Ntot*Ntot-1))
-	end
-	
-	return nullerror
-end	
+  if degreecorrection == true
+    nullerror = 0
+    for di in degrees
+      nullerror += di*log.(di)
+    end
+    nullerror = 1 + log.(Ktot) - 2*nullerror/Ktot 
+  else
+    nullerror = 1 - log.(Ktot/(Ntot*Ntot-1))
+  end
+  
+  return nullerror
+end 
 ######################################
 
 
@@ -388,10 +389,13 @@ function MinimumDescriptionLength(links,degrees,block)
     end
     MDL = 0
     for k = 1:B
-        lout[k] == 0 ? continue : MDL += -lout[k]*log2(lout[k]) + (lin[k]+lout[k])*log2((lin[k]+lout[k]))
+        lin[k]+lout[k] == 0 ? continue : MDL += (lin[k]+lout[k])*log2(lin[k]+lout[k])
+        lout[k] == 0 ? continue : MDL -= lout[k]*log2(lout[k])
     end
-    MDL = 2*MDL
-    MDL += 2*cut*(1+log2(2*cut)) + Ktot
+    MDL = 2*MDL + Ktot
+    if cut > 0
+        MDL += 2*cut*(1+log2(2*cut))
+    end
     for i = 1:size(degrees,1)
         if degrees[i] == 0
             println("degree = 0 exists!")
@@ -448,7 +452,7 @@ end
 
 # Alluvial diagram: smap file generator ##########
 function AlluvialDiagram(B,block,maxPSIval)
-    significant = 0.7
+    significant = 0.9
     Ntot = size(maxPSIval,1)
     stralluvial = "partition$(B).smap"
     fpalluvial = open(stralluvial,"w")
@@ -513,8 +517,8 @@ function PlotResults(x,w1,w2,y1,y1error,y2,y2error,y3,y3error,y4,y4error,z1,z2,z
     # 1st fig --------
     subplot(311)
     p = plot(x,w2,color="crimson",linestyle="-",marker="+",markersize=8,markeredgewidth=2,label="beta",zorder=2)
-    beta0vec = log(1 + [Bmin:Bmax;]/(excm-1))
-    betaastvec = log(1 + [Bmin:Bmax;]/(sqrt(excm)-1))
+    beta0vec = log.(1 + [Bmin:Bmax;]/(excm-1))
+    betaastvec = log.(1 + [Bmin:Bmax;]/(sqrt(excm)-1))
     p = fill_between([Bmin:Bmax;],vec(beta0vec),vec(betaastvec),color="lightgray",alpha=0.4,linestyle=":",edgecolors="white",zorder=1)
     ax = gca()
     setp(ax[:get_xticklabels](),visible=false) # Disable x tick labels
@@ -528,7 +532,7 @@ function PlotResults(x,w1,w2,y1,y1error,y2,y2error,y3,y3error,y4,y4error,z1,z2,z
     fontw1 = Dict("color"=>"mediumblue","size"=>16)
     ylabel(L"$\alpha$",fontdict=fontw1)
     setp(axw1[:get_yticklabels](),color="mediumblue") # Y Axis font formatting
-    ax[:set_xlim](Bmin-0.2,Bmax+0.2)
+    ax[:set_xlim]([Bmin,Bmax])
 
     # 2nd fig --------
     subplot(312)
@@ -546,7 +550,7 @@ function PlotResults(x,w1,w2,y1,y1error,y2,y2error,y3,y3error,y4,y4error,z1,z2,z
     font1 = Dict("color"=>"k")
     ylabel("Prediction/training error",fontdict=font1)
     setp(ax[:get_yticklabels](),color="k") # Y Axis font formatting
-    ax[:set_xlim](Bmin-0.2,Bmax+0.2)
+    ax[:set_xlim]([Bmin,Bmax])
 
     # 3rd fig --------
     subplot(313)
@@ -582,14 +586,16 @@ function PlotResults(x,w1,w2,y1,y1error,y2,y2error,y3,y3error,y4,y4error,z1,z2,z
         ax3[:spines]["top"][:set_visible](false) # Hide the top edge of the axis
         ax3[:spines]["bottom"][:set_visible](false) # Hide the bottom edge of the axis
 
-    #axis("tight")
+    axis("tight")
 
-    ax[:set_xlim](Bmin-0.2,Bmax+0.2)
+    ax[:set_xscale]("linear")
+    ax[:set_xlim]([Bmin,Bmax])
 #    fig[:canvas][:draw]() # Update the figure
 #    suptitle(dataset,fontdict=fontLarge)
-    savefig("assessment_$(dataset).pdf",bbox_inches="tight",pad_inches=0.1)
+    savefig("plot_$(dataset).pdf",bbox_inches="tight",pad_inches=0.1)
     
 end
+
 
 
 
@@ -640,7 +646,7 @@ Reference: Tatsuro Kawamoto and Yoshiyuki Kabashima, arXiv:1606.07668 (2016).
 
 using DocOpt  # import docopt function
 
-args = docopt(doc, version=v"0.1.5")
+args = docopt(doc, version=v"0.1.6.1")
 strdataset = args["<filename>"]
 dataset = args["--dataset"]
 Blist = args["--q"]
@@ -818,7 +824,7 @@ open( strdataset, "r" ) do fp
                     println("BP does not converge.... : Raise itrnum or/and BPconv.")
                 end
             end
-            if isnan(maximum(PSI)) == true || maximum(PSI) == Inf || abs(FE) == Inf || abs(CVGP) == Inf || abs(CVMAP) == Inf
+            if isnan(maximum(PSI)) == true || maximum(PSI) == Inf || abs.(FE) == Inf || abs.(CVGP) == Inf || abs.(CVMAP) == Inf
                 overflow += 1
                 if overflow > 10
                     println("overflow occurs too often...")
@@ -1010,3 +1016,20 @@ open( strdataset, "r" ) do fp
 
 end # open
 close(fpmeta)
+
+#inputs: 
+#    dataset = "karate club"
+#    strdataset = "karateclub.txt"
+#    dc = true
+#    priorlearning = false
+#    learning = true
+#    Barray = [2:6;]
+#    samples = 10
+#    learningrate = 0.3
+#
+#options: 
+#    itrmax = 64
+#    BPconv = 10^-6
+#    plots = true
+#    alluvial = true
+#    spectral = true
