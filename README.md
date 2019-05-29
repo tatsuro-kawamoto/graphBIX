@@ -49,7 +49,9 @@ REFERENCE
 ============
 sbm.jl: Tatsuro Kawamoto and Yoshiyuki Kabashima, "Cross-validation estimate of the number of clusters in a network", Scientific Reports, 7, 3327 (2017).
 
-mod.jl: Tatsuro Kawamoto and Yoshiyuki Kabashima, "Comparative analysis on the selection of number of clusters in community detection", arXiv:1606.07668 (2017).
+mod.jl: Tatsuro Kawamoto and Yoshiyuki Kabashima, "Comparative analysis on the selection of number of clusters in community detection", Phys. Rev. E 97, 022315 (2018).
+
+labeled_sbm: Tatsuro Kawamoto, "Algorithmic detectability threshold of the stochastic block model", Phys. Rev. E 97, 032301 (2018).
 
 ============  
 Author: Tatsuro Kawamoto: kawamoto.tatsuro@gmail.com
